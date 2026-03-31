@@ -26,21 +26,25 @@ const state = {
   searchDebounce:  null,
   downloading:     false,
   searchIndex:     null,      // 서버에서 로드한 검색 인덱스 (세션 메모리 캐시)
+  bookFilter:      '',        // 책 목록 필터 텍스트
+  bookFilterOpen:  false,     // 필터 입력창 열림 여부
   bmMode:             false,  // 책갈피 선택 모드
   bmIgnoreNextClick:  false   // 롱프레스 해제 click 오발 방지 플래그
 };
 
 /* ── DOM ─────────────────────────────────────────── */
-const mainEl  = document.getElementById('main-content');
-const titleEl = document.getElementById('header-title');
-const backBtn = document.getElementById('back-btn');
-const navBtns = document.querySelectorAll('.nav-btn');
+const mainEl    = document.getElementById('main-content');
+const titleEl   = document.getElementById('header-title');
+const backBtn   = document.getElementById('back-btn');
+const filterBtn = document.getElementById('filter-btn');
+const navBtns   = document.querySelectorAll('.nav-btn');
 
 /* ── 초기화 ──────────────────────────────────────── */
 navBtns.forEach(btn => {
   btn.addEventListener('click', () => switchTab(btn.dataset.tab));
 });
 backBtn.addEventListener('click', goBack);
+filterBtn.addEventListener('click', toggleBookFilter);
 
 // 안드로이드 하드웨어 뒤로가기 버튼 처리
 window.addEventListener('popstate', () => {
@@ -61,6 +65,8 @@ function switchTab(tab) {
   state.selectedBook  = null;
   state.selectedChapter = null;
   state.selectedVerse = null;
+  state.bookFilter    = '';
+  state.bookFilterOpen = false;
   navBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   render();
 }
@@ -84,8 +90,16 @@ function goBack() {
    메인 렌더
    ========================================================= */
 function render() {
+  const isBooksView = state.currentView === 'books'
+    && state.currentTab !== 'search' && state.currentTab !== 'settings';
+
   backBtn.classList.toggle('hidden',
     state.currentTab === 'search' || state.currentTab === 'settings' || state.currentView === 'books');
+
+  // 필터 버튼: 책 목록에서만 표시
+  filterBtn.classList.toggle('hidden', !isBooksView);
+  document.getElementById('filter-icon-search').style.display = state.bookFilterOpen ? 'none' : '';
+  document.getElementById('filter-icon-close').style.display  = state.bookFilterOpen ? ''     : 'none';
 
   if (state.currentTab === 'search')   { titleEl.textContent = '검색'; renderSearch();   return; }
   if (state.currentTab === 'settings') { titleEl.textContent = '설정'; renderSettings(); return; }
@@ -100,24 +114,73 @@ function render() {
 /* =========================================================
    책 목록
    ========================================================= */
+function toggleBookFilter() {
+  state.bookFilterOpen = !state.bookFilterOpen;
+  if (!state.bookFilterOpen) state.bookFilter = '';
+  render();
+  if (state.bookFilterOpen) {
+    const inp = mainEl.querySelector('#book-filter-input');
+    if (inp) inp.focus();
+  }
+}
+
 function renderBooks() {
   const isOT = state.currentTab === 'ot';
   titleEl.textContent = isOT ? '구약성경' : '신약성경';
   const books = isOT ? BOOKS_OT : BOOKS_NT;
 
-  let html = ``;
+  const q = state.bookFilter.trim();
+  const filtered = q
+    ? books.filter(b => b.id.includes(q))
+    : books;
 
-  books.forEach(book => {
+  let html = '';
+
+  // 필터 입력창
+  if (state.bookFilterOpen) {
     html += `
-      <div class="book-item" data-id="${book.id}">
-        <span class="book-name">${book.id}</span>
-        <span class="book-meta">${book.ch}장</span>
-        <span class="book-arrow">›</span>
+      <div class="book-filter-bar">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="flex-shrink:0;color:#999">
+          <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/>
+          <path d="m20 20-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <input id="book-filter-input" class="book-filter-input"
+          type="text" placeholder="성경 이름 검색…"
+          value="${escHtml(state.bookFilter)}" autocomplete="off">
       </div>`;
-  });
+  }
+
+  // 책 목록
+  if (filtered.length === 0) {
+    html += `<div class="no-result">「${escHtml(q)}」에 해당하는 성경이 없습니다</div>`;
+  } else {
+    filtered.forEach(book => {
+      const name = q
+        ? book.id.replace(q, `<mark>${escHtml(q)}</mark>`)
+        : escHtml(book.id);
+      html += `
+        <div class="book-item" data-id="${escHtml(book.id)}">
+          <span class="book-name">${name}</span>
+          <span class="book-meta">${book.ch}장</span>
+          <span class="book-arrow">›</span>
+        </div>`;
+    });
+  }
 
   mainEl.innerHTML = html;
   mainEl.scrollTop = 0;
+
+  // 필터 입력 이벤트
+  const inp = mainEl.querySelector('#book-filter-input');
+  if (inp) {
+    inp.addEventListener('input', e => {
+      state.bookFilter = e.target.value;
+      renderBooks();
+      // 포커스·커서 위치 유지
+      const next = mainEl.querySelector('#book-filter-input');
+      if (next) { next.focus(); next.setSelectionRange(next.value.length, next.value.length); }
+    });
+  }
 
   mainEl.querySelectorAll('.book-item').forEach(el =>
     el.addEventListener('click', () => selectBook(el.dataset.id)));
