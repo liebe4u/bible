@@ -875,6 +875,8 @@ function renderSettings() {
     ?.addEventListener('click', confirmDeleteCache);
   mainEl.querySelector('#download-all-btn')
     ?.addEventListener('click', startFullDownload);
+  mainEl.querySelector('#reload-btn')
+    ?.addEventListener('click', () => location.reload());
 }
 
 /* ── 설정 HTML 빌드 ──────────────────────────── */
@@ -952,14 +954,15 @@ function buildSettingsHTML() {
     </div>
 
     <!-- ④ 버튼 -->
-    <div class="settings-btn-row">
+    <div class="settings-btn-group">
       <button class="settings-action-btn primary" id="download-all-btn">
         전체 다운로드 (오프라인 저장)
       </button>
-    </div>
-    <div class="settings-btn-row" style="margin-top:0">
       <button class="settings-action-btn danger" id="delete-cache-btn">
         저장 데이터 삭제
+      </button>
+      <button class="settings-action-btn normal" id="reload-btn">
+        데이터 새로고침
       </button>
     </div>`;
 }
