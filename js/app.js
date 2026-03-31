@@ -29,18 +29,16 @@ const navBtns = document.querySelectorAll('.nav-btn');
 
 /* ── 초기화 ──────────────────────────────────────── */
 navBtns.forEach(btn => {
-  if (!btn.dataset.tab) return;   // 설정 버튼은 별도 처리
   btn.addEventListener('click', () => switchTab(btn.dataset.tab));
 });
 backBtn.addEventListener('click', goBack);
 
 // 안드로이드 하드웨어 뒤로가기 버튼 처리
 window.addEventListener('popstate', () => {
-  const isDeep = state.currentTab !== 'search' && state.currentView !== 'books';
-  if (isDeep) {
-    goBack();
-  }
-  // goBack() 내부에서 render()가 호출되고, render()에서 isDeep이면 다시 pushState됨
+  const isDeep = state.currentTab !== 'search'
+              && state.currentTab !== 'settings'
+              && state.currentView !== 'books';
+  if (isDeep) goBack();
 });
 
 switchTab('ot');
@@ -50,7 +48,7 @@ switchTab('ot');
    ========================================================= */
 function switchTab(tab) {
   state.currentTab    = tab;
-  state.currentView   = tab === 'search' ? 'search' : 'books';
+  state.currentView   = (tab === 'search' || tab === 'settings') ? tab : 'books';
   state.selectedBook  = null;
   state.selectedChapter = null;
   state.selectedVerse = null;
@@ -59,7 +57,7 @@ function switchTab(tab) {
 }
 
 function goBack() {
-  if (state.currentTab === 'search') return;
+  if (state.currentTab === 'search' || state.currentTab === 'settings') return;
   if (state.currentView === 'reading') {
     state.currentView = 'verses';
     state.selectedVerse = null;
@@ -78,9 +76,10 @@ function goBack() {
    ========================================================= */
 function render() {
   backBtn.classList.toggle('hidden',
-    state.currentTab === 'search' || state.currentView === 'books');
+    state.currentTab === 'search' || state.currentTab === 'settings' || state.currentView === 'books');
 
-  if (state.currentTab === 'search') { titleEl.textContent = '검색'; renderSearch(); return; }
+  if (state.currentTab === 'search')   { titleEl.textContent = '검색'; renderSearch();   return; }
+  if (state.currentTab === 'settings') { titleEl.textContent = '설정'; renderSettings(); return; }
   switch (state.currentView) {
     case 'books':    renderBooks();    break;
     case 'chapters': renderChapters(); break;
@@ -97,23 +96,7 @@ function renderBooks() {
   titleEl.textContent = isOT ? '구약성경' : '신약성경';
   const books = isOT ? BOOKS_OT : BOOKS_NT;
 
-  const cached = getCachedStats();
-  const totalChapters = [...BOOKS_OT,...BOOKS_NT].reduce((s,b) => s+b.ch, 0);
-  const pct = Math.round(cached / totalChapters * 100);
-
-  let html = `<div class="section-label">${isOT ? '구약 39권' : '신약 27권'}</div>`;
-
-  // 다운로드 배너 (전체 다운로드 안 됐을 때만 표시)
-  if (cached < totalChapters) {
-    html += `
-      <div class="dl-banner">
-        <div class="dl-banner-text">
-          <strong>오프라인 저장</strong>
-          <span>장을 열면 자동 저장됩니다 · 저장됨 ${cached}/${totalChapters}장 (${pct}%)</span>
-        </div>
-        <button class="dl-all-btn" id="dl-all-btn">전체</button>
-      </div>`;
-  }
+  let html = ``;
 
   books.forEach(book => {
     html += `
@@ -129,9 +112,6 @@ function renderBooks() {
 
   mainEl.querySelectorAll('.book-item').forEach(el =>
     el.addEventListener('click', () => selectBook(el.dataset.id)));
-
-  const dlBtn = mainEl.querySelector('#dl-all-btn');
-  if (dlBtn) dlBtn.addEventListener('click', startFullDownload);
 }
 
 function selectBook(bookId) {
@@ -245,42 +225,71 @@ function renderReading() {
           <span class="verse-text">${escHtml(text)}</span>
         </div>`;
     }
+    html += '</div>';
+    mainEl.innerHTML = html;
+    mainEl.scrollTop = 0;
+    if (target) {
+      requestAnimationFrame(() => {
+        const el = mainEl.querySelector(`#v-${target}`);
+        if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      });
+    }
+    attachVerseHandlers();
   } else {
+    // 데이터 없음 → 자동 온라인 fetch (저장 안 함)
     html += `
-      <div class="fetch-box" id="fetch-box">
-        <div class="fetch-icon">
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
-            <path d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2z" stroke="#ccc" stroke-width="1.5"/>
-            <path d="M12 8v4l3 3" stroke="#ccc" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
+      <div class="auto-fetch-wrap" id="auto-fetch-wrap">
+        <div class="spinner"></div>
+        <p class="fetch-sub" style="margin-top:12px">불러오는 중…</p>
+      </div>`;
+    html += '</div>';
+    mainEl.innerHTML = html;
+    mainEl.scrollTop = 0;
+    fetchAndShowChapter(book.id, ch, target);
+  }
+}
+
+// fetch된 verses 객체로 읽기 뷰를 직접 렌더 (저장 없이)
+function renderReadingFromData(book, ch, target, versesObj) {
+  titleEl.textContent = `${book.id} ${ch}장`;
+  state.bmMode = false;
+
+  let html = `<div class="reading-wrap" id="reading-wrap">
+    <div class="reading-title">${book.id}</div>
+    <div class="reading-subtitle">${ch}장</div>
+    <div class="bm-hint-bar">책갈피 선택 후 아무 곳이나 탭하세요</div>`;
+
+  for (const [vStr, text] of Object.entries(versesObj)) {
+    const v      = parseInt(vStr);
+    const isT    = v === target;
+    const marked = isBookmarked(book.id, ch, v);
+    html += `
+      <div class="verse-row${isT ? ' target-verse' : ''}${marked ? ' bm-saved' : ''}" id="v-${v}"
+        data-book="${escHtml(book.id)}" data-ch="${ch}" data-v="${v}" data-text="${escHtml(text)}">
+        <div class="verse-marker">
+          <span class="verse-num">${v}</span>
+          <span class="bm-icon">
+            <svg viewBox="0 0 24 24" fill="${marked ? 'currentColor' : 'none'}">
+              <path d="M5 3h14a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"
+                stroke="currentColor" stroke-width="1.3"
+                stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </span>
         </div>
-        <p class="fetch-msg">본문이 아직 저장되지 않았습니다</p>
-        <button class="fetch-btn" id="fetch-btn">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-            <path d="M12 3v13M7 12l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M5 20h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          </svg>
-          이 장 불러오기
-        </button>
-        <p class="fetch-sub">인터넷 연결이 필요합니다 · 저장 후 오프라인 사용 가능</p>
+        <span class="verse-text">${escHtml(text)}</span>
       </div>`;
   }
   html += '</div>';
 
   mainEl.innerHTML = html;
   mainEl.scrollTop = 0;
-
-  if (target && hasData) {
+  if (target) {
     requestAnimationFrame(() => {
       const el = mainEl.querySelector(`#v-${target}`);
       if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     });
   }
-
-  const fetchBtn = mainEl.querySelector('#fetch-btn');
-  if (fetchBtn) fetchBtn.addEventListener('click', () => fetchAndShowChapter(book.id, ch, target));
-
-  if (hasData) attachVerseHandlers();
+  attachVerseHandlers();
 }
 
 /* =========================================================
@@ -352,7 +361,8 @@ function exitBmMode(wrap) {
    URL 형식: /v2/korean/{책번호}/{장번호}.json
    응답 형식: { verses: [{verse, text}, ...] }
    ========================================================= */
-async function fetchChapterData(bookName, chapter) {
+// save=false: 온라인 읽기 (저장 안 함) / save=true: 전체 다운로드 시 저장
+async function fetchChapterData(bookName, chapter, save = false) {
   const bookNum = BOOK_NUMBERS[bookName];
   if (!bookNum) return null;
 
@@ -367,38 +377,44 @@ async function fetchChapterData(bookName, chapter) {
 
     const obj = {};
     verses.forEach(v => {
-      // 절 끝 공백 제거
       obj[v.verse] = (v.text || '').trim();
     });
-    saveChapterToLocal(bookName, chapter, obj);
+    if (save) saveChapterToLocal(bookName, chapter, obj);
     return obj;
   } catch (e) { return null; }
 }
 
 async function fetchAndShowChapter(bookName, chapter, targetVerse) {
-  const box = mainEl.querySelector('#fetch-box');
-  if (!box) return;
+  const data = await fetchChapterData(bookName, chapter, false); // 온라인 읽기 = 저장 안 함
 
-  box.innerHTML = `
-    <div class="fetch-loading">
-      <div class="spinner"></div>
-      <p>불러오는 중…</p>
-    </div>`;
+  // 컨텍스트 변경 확인 (탭 전환 등)
+  if (state.currentView !== 'reading' ||
+      state.selectedBook?.id !== bookName ||
+      state.selectedChapter !== chapter) return;
 
-  const data = await fetchChapterData(bookName, chapter);
   if (!data) {
-    box.innerHTML = `
-      <p class="fetch-msg" style="color:#e55">불러오기 실패</p>
-      <p class="fetch-sub">인터넷 연결을 확인하거나 잠시 후 다시 시도해주세요.</p>
-      <button class="fetch-btn" id="fetch-btn-retry">다시 시도</button>`;
-    mainEl.querySelector('#fetch-btn-retry')?.addEventListener('click',
-      () => fetchAndShowChapter(bookName, chapter, targetVerse));
+    const wrap = mainEl.querySelector('#auto-fetch-wrap');
+    if (wrap) {
+      wrap.innerHTML = `
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+          <path d="M1 1l22 22M16.72 11.06A11 11 0 0 1 19 12.55M5 12.55a11 11 0 0 1 14.08-2.87M10.73 5.08A11 11 0 0 1 23 12.55M2 8.82a15 15 0 0 1 4.49-2.81M12 20h.01"
+            stroke="#ccc" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <p class="fetch-msg" style="margin-top:12px">인터넷 연결을 확인해주세요</p>
+        <p class="fetch-sub">오프라인 사용은 설정에서 전체 다운로드하세요</p>
+        <button class="fetch-btn" id="fetch-retry" style="margin-top:16px">다시 시도</button>`;
+      mainEl.querySelector('#fetch-retry')?.addEventListener('click', () => {
+        wrap.innerHTML = `
+          <div class="spinner"></div>
+          <p class="fetch-sub" style="margin-top:12px">불러오는 중…</p>`;
+        fetchAndShowChapter(bookName, chapter, targetVerse);
+      });
+    }
     return;
   }
 
-  // 성공 → 뷰 다시 렌더
-  state.selectedVerse = targetVerse;
-  renderReading();
+  // 성공 → fetch 결과로 직접 렌더 (저장 없이 표시만)
+  renderReadingFromData(state.selectedBook, chapter, targetVerse, data);
 }
 
 /* =========================================================
@@ -431,7 +447,7 @@ async function startFullDownload() {
   let failed = 0;
 
   for (const { book, ch } of chapters) {
-    const data = await fetchChapterData(book, ch);
+    const data = await fetchChapterData(book, ch, true); // 전체 다운로드 = 저장
     if (data) done++; else failed++;
     updateDownloadOverlay(done + failed, chapters.length, done, failed);
     await sleep(120); // rate limit 방지
@@ -619,11 +635,9 @@ function renderBookmarkList(body) {
             stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
         <p>저장된 책갈피가 없습니다</p>
-        <span>구절을 길게 눌러 책갈피를 저장하세요</span>
+        <span>구절을 길게 누르면 책갈피를 저장할 수 있습니다</span>
       </div>
-      <div class="search-hint" style="padding-top:0">
-        <p style="color:#ccc;font-size:13px">검색어를 2글자 이상 입력하면<br>구절 검색이 시작됩니다</p>
-      </div>`;
+`;
     return;
   }
 
@@ -700,30 +714,16 @@ function renderBookmarkList(body) {
 }
 
 /* =========================================================
-   설정 시트
+   설정 탭 렌더
    ========================================================= */
-const settingsBtn      = document.getElementById('settings-btn');
-const settingsSheet    = document.getElementById('settings-sheet');
-const settingsBackdrop = document.getElementById('settings-backdrop');
+function renderSettings() {
+  mainEl.innerHTML = `<div class="settings-page">${buildSettingsHTML()}</div>`;
+  mainEl.scrollTop = 0;
 
-settingsBtn.addEventListener('click', openSettings);
-settingsBackdrop.addEventListener('click', closeSettings);
-
-function openSettings() {
-  settingsSheet.innerHTML = buildSettingsHTML();
-  settingsSheet.classList.remove('hidden');
-  settingsBackdrop.classList.remove('hidden');
-
-  // 이벤트 바인딩
-  settingsSheet.querySelector('#close-sheet-btn')
-    ?.addEventListener('click', closeSettings);
-  settingsSheet.querySelector('#delete-cache-btn')
+  mainEl.querySelector('#delete-cache-btn')
     ?.addEventListener('click', confirmDeleteCache);
-}
-
-function closeSettings() {
-  settingsSheet.classList.add('hidden');
-  settingsBackdrop.classList.add('hidden');
+  mainEl.querySelector('#download-all-btn')
+    ?.addEventListener('click', startFullDownload);
 }
 
 /* ── 설정 HTML 빌드 ──────────────────────────── */
@@ -744,8 +744,6 @@ function buildSettingsHTML() {
   const barW = Math.max(pct, 2);
 
   return `
-    <div class="sheet-handle"></div>
-    <div class="sheet-title">설정</div>
 
     <!-- ① 저장 위치 -->
     <div class="settings-section">
@@ -791,13 +789,26 @@ function buildSettingsHTML() {
       </div>
     </div>
 
-    <!-- ③ 버튼 -->
+    <!-- ③ 오프라인 모드 -->
+    <div class="settings-section">
+      <div class="settings-section-label">오프라인 저장</div>
+      <div class="mode-card">
+        <div class="mode-row">
+          <span class="mode-badge offline">오프라인</span>
+          <span class="mode-desc">전체 다운로드 후 인터넷 없이 사용할 수 있습니다.<br>저장 공간 약 3 MB가 필요합니다.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ④ 버튼 -->
     <div class="settings-btn-row">
+      <button class="settings-action-btn primary" id="download-all-btn">
+        전체 다운로드 (오프라인 저장)
+      </button>
+    </div>
+    <div class="settings-btn-row" style="margin-top:0">
       <button class="settings-action-btn danger" id="delete-cache-btn">
         저장 데이터 삭제
-      </button>
-      <button class="settings-action-btn normal" id="close-sheet-btn">
-        닫기
       </button>
     </div>`;
 }
@@ -830,8 +841,7 @@ function confirmDeleteCache() {
   ov.querySelector('#confirm-ok').addEventListener('click', () => {
     deleteCachedData();
     ov.remove();
-    closeSettings();
-    render();
+    render(); // 설정 탭 새로고침 (저장 현황 업데이트)
     showToast('저장 데이터를 모두 삭제했습니다');
   });
 }

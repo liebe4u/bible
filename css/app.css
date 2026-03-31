@@ -189,6 +189,8 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
 /* ── Reading View ─────────────────────────────── */
 .reading-wrap {
   padding: 16px 16px 24px;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .reading-title {
@@ -426,6 +428,17 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
 .dl-all-btn:active { background: #444; }
 
 /* ── Fetch box (본문 없는 장) ──────────────────── */
+/* auto-fetch 로딩/오류 래퍼 */
+.auto-fetch-wrap {
+  margin-top: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 0 24px;
+  text-align: center;
+}
+
 .fetch-box {
   margin-top: 48px;
   display: flex;
@@ -560,6 +573,11 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
   border-bottom: 1px solid #f0f0f0;
 }
 
+/* 설정 탭 전체 페이지 래퍼 */
+.settings-page {
+  padding: 8px 0 24px;
+}
+
 .settings-section {
   padding: 14px 20px 4px;
 }
@@ -669,6 +687,38 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
   color: #333;
 }
 .settings-action-btn.normal:active { background: #eee; }
+.settings-action-btn.primary {
+  background: #111;
+  color: #fff;
+}
+.settings-action-btn.primary:active { background: #333; }
+
+/* 온라인/오프라인 모드 카드 */
+.mode-card {
+  background: #f8f8f8;
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.mode-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.mode-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 20px;
+  margin-top: 2px;
+}
+.mode-badge.online  { background: #e0f0e0; color: #3a7a3a; }
+.mode-badge.offline { background: #e8e8e8; color: #555; }
+.mode-desc {
+  font-size: 13px;
+  color: #666;
+  line-height: 1.6;
+}
 
 /* 확인 다이얼로그 */
 .confirm-overlay {
