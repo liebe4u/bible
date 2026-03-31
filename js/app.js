@@ -127,16 +127,9 @@ function toggleBookFilter() {
 function renderBooks() {
   const isOT = state.currentTab === 'ot';
   titleEl.textContent = isOT ? '구약성경' : '신약성경';
-  const books = isOT ? BOOKS_OT : BOOKS_NT;
 
-  const q = state.bookFilter.trim();
-  const filtered = q
-    ? books.filter(b => b.id.includes(q))
-    : books;
-
+  // 필터 입력창 + 목록 컨테이너 (구조는 한 번만 만들고, 목록만 갱신)
   let html = '';
-
-  // 필터 입력창
   if (state.bookFilterOpen) {
     html += `
       <div class="book-filter-bar">
@@ -145,14 +138,50 @@ function renderBooks() {
           <path d="m20 20-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
         </svg>
         <input id="book-filter-input" class="book-filter-input"
-          type="text" placeholder="성경 이름 검색…"
-          value="${escHtml(state.bookFilter)}" autocomplete="off">
+          type="text" placeholder="성경 이름 검색…" autocomplete="off">
       </div>`;
   }
+  html += `<div id="book-list-body"></div>`;
 
-  // 책 목록
+  mainEl.innerHTML = html;
+  mainEl.scrollTop = 0;
+
+  // 필터 입력창 이벤트 (compositionend 로 한글 IME 조합 완료 후 처리)
+  const inp = mainEl.querySelector('#book-filter-input');
+  if (inp) {
+    inp.value = state.bookFilter;
+    inp.focus();
+
+    let composing = false;
+    inp.addEventListener('compositionstart', () => { composing = true; });
+    inp.addEventListener('compositionend', e => {
+      composing = false;
+      state.bookFilter = e.target.value;
+      renderBookList();
+    });
+    inp.addEventListener('input', e => {
+      if (composing) return; // IME 조합 중엔 무시
+      state.bookFilter = e.target.value;
+      renderBookList();
+    });
+  }
+
+  renderBookList();
+}
+
+// 목록만 업데이트 (입력창 DOM은 건드리지 않음)
+function renderBookList() {
+  const body = mainEl.querySelector('#book-list-body');
+  if (!body) return;
+
+  const isOT = state.currentTab === 'ot';
+  const books = isOT ? BOOKS_OT : BOOKS_NT;
+  const q = state.bookFilter.trim();
+  const filtered = q ? books.filter(b => b.id.includes(q)) : books;
+
+  let html = '';
   if (filtered.length === 0) {
-    html += `<div class="no-result">「${escHtml(q)}」에 해당하는 성경이 없습니다</div>`;
+    html = `<div class="no-result">「${escHtml(q)}」에 해당하는 성경이 없습니다</div>`;
   } else {
     filtered.forEach(book => {
       const name = q
@@ -167,22 +196,8 @@ function renderBooks() {
     });
   }
 
-  mainEl.innerHTML = html;
-  mainEl.scrollTop = 0;
-
-  // 필터 입력 이벤트
-  const inp = mainEl.querySelector('#book-filter-input');
-  if (inp) {
-    inp.addEventListener('input', e => {
-      state.bookFilter = e.target.value;
-      renderBooks();
-      // 포커스·커서 위치 유지
-      const next = mainEl.querySelector('#book-filter-input');
-      if (next) { next.focus(); next.setSelectionRange(next.value.length, next.value.length); }
-    });
-  }
-
-  mainEl.querySelectorAll('.book-item').forEach(el =>
+  body.innerHTML = html;
+  body.querySelectorAll('.book-item').forEach(el =>
     el.addEventListener('click', () => selectBook(el.dataset.id)));
 }
 
@@ -638,7 +653,16 @@ function renderSearch() {
   const input = mainEl.querySelector('#search-input');
   input.selectionStart = input.selectionEnd = input.value.length;
 
+  let searchComposing = false;
+  input.addEventListener('compositionstart', () => { searchComposing = true; });
+  input.addEventListener('compositionend', e => {
+    searchComposing = false;
+    state.searchQuery = e.target.value;
+    clearTimeout(state.searchDebounce);
+    state.searchDebounce = setTimeout(updateSearchResults, 300);
+  });
   input.addEventListener('input', e => {
+    if (searchComposing) return;
     state.searchQuery = e.target.value;
     clearTimeout(state.searchDebounce);
     state.searchDebounce = setTimeout(updateSearchResults, 300);
