@@ -25,6 +25,7 @@ const state = {
   searchQuery:     '',
   searchDebounce:  null,
   downloading:     false,
+  downloadCancel:  false,  // 다운로드 중단 플래그
   searchIndex:     null,      // 서버에서 로드한 검색 인덱스 (세션 메모리 캐시)
   bookFilter:      '',        // 책 목록 필터 텍스트
   bookFilterOpen:  false,     // 필터 입력창 열림 여부
@@ -540,13 +541,20 @@ async function fetchAndShowChapter(bookName, chapter, targetVerse) {
 }
 
 /* =========================================================
-   전체 성경 다운로드
+   전체 성경 다운로드 (이어받기 지원)
    ========================================================= */
 async function startFullDownload() {
   if (state.downloading) return;
-  state.downloading = true;
+  state.downloading  = true;
+  state.downloadCancel = false;
 
-  const allBooks = [...BOOKS_OT, ...BOOKS_NT];
+  const allBooks   = [...BOOKS_OT, ...BOOKS_NT];
+  const totalChaps = allBooks.reduce((s, b) => s + b.ch, 0); // 1189
+
+  // 이미 저장된 장 수 (프로그레스 기준점)
+  const alreadyCached = getCachedStats();
+
+  // 아직 저장 안 된 장만 목록화
   const chapters = [];
   allBooks.forEach(b => {
     for (let c = 1; c <= b.ch; c++) {
@@ -562,28 +570,35 @@ async function startFullDownload() {
     return;
   }
 
-  // 진행률 오버레이 표시
-  showDownloadOverlay(0, chapters.length);
+  // 오버레이 표시 — 이미 저장된 분량을 초기값으로 반영
+  showDownloadOverlay(alreadyCached, totalChaps);
 
   let done = 0;
   let failed = 0;
 
   for (const { book, ch } of chapters) {
-    const data = await fetchChapterData(book, ch, true); // 전체 다운로드 = 저장
+    if (state.downloadCancel) break; // 중단 버튼 처리
+
+    const data = await fetchChapterData(book, ch, true);
     if (data) done++; else failed++;
-    updateDownloadOverlay(done + failed, chapters.length, done, failed);
+    updateDownloadOverlay(alreadyCached + done + failed, totalChaps, alreadyCached + done, failed);
     await sleep(120); // rate limit 방지
   }
 
   state.downloading = false;
-  hideDownloadOverlay(done, failed);
+
+  if (state.downloadCancel) {
+    cancelDownloadOverlay(alreadyCached + done);
+  } else {
+    hideDownloadOverlay(alreadyCached + done, failed);
+  }
   render();
 }
 
 /* =========================================================
    다운로드 오버레이 UI
    ========================================================= */
-function showDownloadOverlay(done, total) {
+function getOrCreateOverlay() {
   let ov = document.getElementById('dl-overlay');
   if (!ov) {
     ov = document.createElement('div');
@@ -591,36 +606,64 @@ function showDownloadOverlay(done, total) {
     ov.className = 'dl-overlay';
     document.getElementById('app').appendChild(ov);
   }
-  ov.innerHTML = downloadOverlayHTML(done, total, 0, 0);
+  return ov;
 }
 
-function updateDownloadOverlay(done, total, ok, fail) {
+function showDownloadOverlay(savedSoFar, total) {
+  const ov = getOrCreateOverlay();
+  ov.innerHTML = downloadOverlayHTML(savedSoFar, total, savedSoFar, 0);
+  ov.querySelector('#dl-cancel')?.addEventListener('click', () => {
+    state.downloadCancel = true;
+  });
+}
+
+function updateDownloadOverlay(progress, total, ok, fail) {
   const ov = document.getElementById('dl-overlay');
-  if (ov) ov.innerHTML = downloadOverlayHTML(done, total, ok, fail);
+  if (!ov) return;
+  ov.innerHTML = downloadOverlayHTML(progress, total, ok, fail);
+  ov.querySelector('#dl-cancel')?.addEventListener('click', () => {
+    state.downloadCancel = true;
+  });
 }
 
-function hideDownloadOverlay(ok, fail) {
+function hideDownloadOverlay(totalSaved, fail) {
   const ov = document.getElementById('dl-overlay');
   if (!ov) return;
   ov.innerHTML = `
     <div class="dl-ov-inner">
       <div class="dl-ov-done">✓</div>
       <p style="font-weight:700;font-size:17px">다운로드 완료</p>
-      <p style="color:#888;font-size:13px;margin-top:4px">${ok}장 저장 완료 · 오류 ${fail}장</p>
+      <p style="color:#888;font-size:13px;margin-top:4px">${totalSaved}장 저장됨 · 오류 ${fail}장</p>
       <button class="fetch-btn" style="margin-top:20px" id="dl-close">닫기</button>
     </div>`;
-  ov.querySelector('#dl-close').addEventListener('click', () => ov.remove());
+  ov.querySelector('#dl-close').addEventListener('click', () => { ov.remove(); render(); });
 }
 
-function downloadOverlayHTML(done, total, ok, fail) {
-  const pct = total > 0 ? Math.round(done / total * 100) : 0;
+function cancelDownloadOverlay(savedSoFar) {
+  const ov = document.getElementById('dl-overlay');
+  if (!ov) return;
+  const allBooks   = [...BOOKS_OT, ...BOOKS_NT];
+  const totalChaps = allBooks.reduce((s, b) => s + b.ch, 0);
+  ov.innerHTML = `
+    <div class="dl-ov-inner">
+      <p style="font-size:28px;margin-bottom:8px">⏸</p>
+      <p style="font-weight:700;font-size:17px">다운로드 중단됨</p>
+      <p style="color:#888;font-size:13px;margin-top:6px">${savedSoFar} / ${totalChaps}장 저장됨</p>
+      <p style="color:#bbb;font-size:12px;margin-top:4px">다시 시작하면 이어받기됩니다</p>
+      <button class="fetch-btn" style="margin-top:20px" id="dl-close">닫기</button>
+    </div>`;
+  ov.querySelector('#dl-close').addEventListener('click', () => { ov.remove(); render(); });
+}
+
+function downloadOverlayHTML(progress, total, ok, fail) {
+  const pct = total > 0 ? Math.round(progress / total * 100) : 0;
   return `
     <div class="dl-ov-inner">
-      <p style="font-weight:700;font-size:16px;margin-bottom:16px">성경 전체 다운로드 중</p>
+      <p style="font-weight:700;font-size:16px;margin-bottom:16px">성경 다운로드 중…</p>
       <div class="dl-bar-bg"><div class="dl-bar-fill" style="width:${pct}%"></div></div>
-      <p class="dl-pct">${pct}% &nbsp;·&nbsp; ${done}/${total}장</p>
+      <p class="dl-pct">${pct}% &nbsp;·&nbsp; ${ok} / ${total}장</p>
       ${fail > 0 ? `<p style="font-size:12px;color:#e55;margin-top:4px">오류 ${fail}장</p>` : ''}
-      <p style="font-size:12px;color:#bbb;margin-top:8px">앱을 종료하지 마세요</p>
+      <button class="dl-cancel-btn" id="dl-cancel" style="margin-top:16px">중단</button>
     </div>`;
 }
 
@@ -940,7 +983,7 @@ function buildSettingsHTML() {
     <!-- ④ 버튼 -->
     <div class="settings-btn-group">
       <button class="settings-action-btn primary" id="download-all-btn">
-        전체 다운로드 (오프라인 저장)
+        ${cachedChaps > 0 && cachedChaps < totalChaps ? '파일 이어받기' : '전체 다운로드 (오프라인 저장)'}
       </button>
       <button class="settings-action-btn danger" id="delete-cache-btn">
         저장 데이터 삭제
