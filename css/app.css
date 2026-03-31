@@ -694,6 +694,12 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
 .settings-btn-row {
   padding: 6px 20px 20px;
 }
+.settings-btn-group {
+  padding: 6px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .settings-action-btn {
   width: 100%;
   padding: 14px;
@@ -702,7 +708,6 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
   font-weight: 600;
   cursor: pointer;
   transition: background 0.12s;
-  margin-bottom: 8px;
   text-align: center;
 }
 .settings-action-btn.danger {
