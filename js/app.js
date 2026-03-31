@@ -1,0 +1,679 @@
+/* =========================================================
+   app.js  —  개역한글 성경 앱 메인 로직
+   오프라인 캐싱: getbible.net API → localStorage → 오프라인 사용
+   ========================================================= */
+
+/* ── 상수 ────────────────────────────────────────── */
+const GETBIBLE_API = 'https://api.getbible.net/v2/korean'; // 한국어 고정
+const TOTAL_CHAPS  = 1189; // 구약 929 + 신약 260
+
+/* ── 상태 ────────────────────────────────────────── */
+const state = {
+  currentTab:      'ot',
+  currentView:     'books',  // 'books'|'chapters'|'verses'|'reading'
+  selectedBook:    null,
+  selectedChapter: null,
+  selectedVerse:   null,
+  searchQuery:     '',
+  searchDebounce:  null,
+  downloading:     false
+};
+
+/* ── DOM ─────────────────────────────────────────── */
+const mainEl  = document.getElementById('main-content');
+const titleEl = document.getElementById('header-title');
+const backBtn = document.getElementById('back-btn');
+const navBtns = document.querySelectorAll('.nav-btn');
+
+/* ── 초기화 ──────────────────────────────────────── */
+navBtns.forEach(btn => {
+  if (!btn.dataset.tab) return;   // 설정 버튼은 별도 처리
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+});
+backBtn.addEventListener('click', goBack);
+switchTab('ot');
+
+/* =========================================================
+   탭 / 네비게이션
+   ========================================================= */
+function switchTab(tab) {
+  state.currentTab    = tab;
+  state.currentView   = tab === 'search' ? 'search' : 'books';
+  state.selectedBook  = null;
+  state.selectedChapter = null;
+  state.selectedVerse = null;
+  navBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  render();
+}
+
+function goBack() {
+  if (state.currentTab === 'search') return;
+  if (state.currentView === 'reading') {
+    state.currentView = 'verses';
+    state.selectedVerse = null;
+  } else if (state.currentView === 'verses') {
+    state.currentView = 'chapters';
+    state.selectedChapter = null;
+  } else if (state.currentView === 'chapters') {
+    state.currentView = 'books';
+    state.selectedBook = null;
+  } else return;
+  render();
+}
+
+/* =========================================================
+   메인 렌더
+   ========================================================= */
+function render() {
+  backBtn.classList.toggle('hidden',
+    state.currentTab === 'search' || state.currentView === 'books');
+
+  if (state.currentTab === 'search') { titleEl.textContent = '검색'; renderSearch(); return; }
+  switch (state.currentView) {
+    case 'books':    renderBooks();    break;
+    case 'chapters': renderChapters(); break;
+    case 'verses':   renderVerses();   break;
+    case 'reading':  renderReading();  break;
+  }
+}
+
+/* =========================================================
+   책 목록
+   ========================================================= */
+function renderBooks() {
+  const isOT = state.currentTab === 'ot';
+  titleEl.textContent = isOT ? '구약성경' : '신약성경';
+  const books = isOT ? BOOKS_OT : BOOKS_NT;
+
+  const cached = getCachedStats();
+  const totalChapters = [...BOOKS_OT,...BOOKS_NT].reduce((s,b) => s+b.ch, 0);
+  const pct = Math.round(cached / totalChapters * 100);
+
+  let html = `<div class="section-label">${isOT ? '구약 39권' : '신약 27권'}</div>`;
+
+  // 다운로드 배너 (전체 다운로드 안 됐을 때만 표시)
+  if (cached < totalChapters) {
+    html += `
+      <div class="dl-banner">
+        <div class="dl-banner-text">
+          <strong>오프라인 저장</strong>
+          <span>장을 열면 자동 저장됩니다 · 저장됨 ${cached}/${totalChapters}장 (${pct}%)</span>
+        </div>
+        <button class="dl-all-btn" id="dl-all-btn">전체</button>
+      </div>`;
+  }
+
+  books.forEach(book => {
+    html += `
+      <div class="book-item" data-id="${book.id}">
+        <span class="book-name">${book.id}</span>
+        <span class="book-meta">${book.ch}장</span>
+        <span class="book-arrow">›</span>
+      </div>`;
+  });
+
+  mainEl.innerHTML = html;
+  mainEl.scrollTop = 0;
+
+  mainEl.querySelectorAll('.book-item').forEach(el =>
+    el.addEventListener('click', () => selectBook(el.dataset.id)));
+
+  const dlBtn = mainEl.querySelector('#dl-all-btn');
+  if (dlBtn) dlBtn.addEventListener('click', startFullDownload);
+}
+
+function selectBook(bookId) {
+  const all = [...BOOKS_OT, ...BOOKS_NT];
+  state.selectedBook  = all.find(b => b.id === bookId);
+  state.currentView   = 'chapters';
+  state.selectedChapter = null;
+  state.selectedVerse = null;
+  render();
+}
+
+/* =========================================================
+   장 선택
+   ========================================================= */
+function renderChapters() {
+  const book = state.selectedBook;
+  titleEl.textContent = book.id;
+
+  let html = `<div class="section-label">${book.id} — 장 선택</div>
+              <div class="grid-container">`;
+  for (let c = 1; c <= book.ch; c++) {
+    const cached = isChapterCached(book.id, c) ||
+      (BIBLE_TEXT[book.id]?.[c] && Object.keys(BIBLE_TEXT[book.id][c]).length >= 5);
+    html += `<button class="grid-item${cached ? ' cached' : ''}" data-ch="${c}">${c}</button>`;
+  }
+  html += '</div>';
+
+  mainEl.innerHTML = html;
+  mainEl.scrollTop = 0;
+
+  mainEl.querySelectorAll('.grid-item').forEach(el =>
+    el.addEventListener('click', () => selectChapter(parseInt(el.dataset.ch))));
+}
+
+function selectChapter(chapter) {
+  state.selectedChapter = chapter;
+  state.currentView = 'verses';
+  state.selectedVerse = null;
+  render();
+}
+
+/* =========================================================
+   절 선택
+   ========================================================= */
+function renderVerses() {
+  const book  = state.selectedBook;
+  const ch    = state.selectedChapter;
+  titleEl.textContent = `${book.id} ${ch}장`;
+
+  const total = getVerseCount(book.id, ch);
+  let html = `<div class="section-label">${book.id} ${ch}장 — 절 선택</div>
+              <div class="grid-container">`;
+  for (let v = 1; v <= total; v++) {
+    html += `<button class="grid-item" data-v="${v}">${v}</button>`;
+  }
+  html += '</div>';
+
+  mainEl.innerHTML = html;
+  mainEl.scrollTop = 0;
+
+  mainEl.querySelectorAll('.grid-item').forEach(el =>
+    el.addEventListener('click', () => selectVerse(parseInt(el.dataset.v))));
+}
+
+function selectVerse(verse) {
+  state.selectedVerse = verse;
+  state.currentView   = 'reading';
+  render();
+}
+
+/* =========================================================
+   읽기 뷰
+   ========================================================= */
+function renderReading() {
+  const book   = state.selectedBook;
+  const ch     = state.selectedChapter;
+  const target = state.selectedVerse;
+  const total  = getVerseCount(book.id, ch);
+  titleEl.textContent = `${book.id} ${ch}장`;
+
+  const hasData = hasChapterData(book.id, ch);
+
+  let html = `<div class="reading-wrap">
+    <div class="reading-title">${book.id}</div>
+    <div class="reading-subtitle">${ch}장</div>`;
+
+  if (hasData) {
+    for (let v = 1; v <= total; v++) {
+      const text = getVerseText(book.id, ch, v);
+      if (!text) continue;
+      const isT = v === target;
+      html += `<div class="verse-row${isT ? ' target-verse' : ''}" id="v-${v}">
+        <span class="verse-num">${v}</span>
+        <span class="verse-text">${escHtml(text)}</span>
+      </div>`;
+    }
+  } else {
+    // 데이터 없음 → 가져오기 버튼
+    html += `
+      <div class="fetch-box" id="fetch-box">
+        <div class="fetch-icon">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2z" stroke="#ccc" stroke-width="1.5"/>
+            <path d="M12 8v4l3 3" stroke="#ccc" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <p class="fetch-msg">본문이 아직 저장되지 않았습니다</p>
+        <button class="fetch-btn" id="fetch-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <path d="M12 3v13M7 12l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M5 20h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          이 장 불러오기
+        </button>
+        <p class="fetch-sub">인터넷 연결이 필요합니다 · 저장 후 오프라인 사용 가능</p>
+      </div>`;
+  }
+  html += '</div>';
+
+  mainEl.innerHTML = html;
+  mainEl.scrollTop = 0;
+
+  if (target && hasData) {
+    requestAnimationFrame(() => {
+      const el = mainEl.querySelector(`#v-${target}`);
+      if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+  }
+
+  const fetchBtn = mainEl.querySelector('#fetch-btn');
+  if (fetchBtn) fetchBtn.addEventListener('click', () => fetchAndShowChapter(book.id, ch, target));
+}
+
+/* =========================================================
+   API 페치 — 단일 장  (getbible.net/v2/korean)
+   URL 형식: /v2/korean/{책번호}/{장번호}.json
+   응답 형식: { verses: [{verse, text}, ...] }
+   ========================================================= */
+async function fetchChapterData(bookName, chapter) {
+  const bookNum = BOOK_NUMBERS[bookName];
+  if (!bookNum) return null;
+
+  try {
+    const url  = `${GETBIBLE_API}/${bookNum}/${chapter}.json`;
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+
+    const verses = data.verses;
+    if (!Array.isArray(verses) || verses.length === 0) return null;
+
+    const obj = {};
+    verses.forEach(v => {
+      // 절 끝 공백 제거
+      obj[v.verse] = (v.text || '').trim();
+    });
+    saveChapterToLocal(bookName, chapter, obj);
+    return obj;
+  } catch (e) { return null; }
+}
+
+async function fetchAndShowChapter(bookName, chapter, targetVerse) {
+  const box = mainEl.querySelector('#fetch-box');
+  if (!box) return;
+
+  box.innerHTML = `
+    <div class="fetch-loading">
+      <div class="spinner"></div>
+      <p>불러오는 중…</p>
+    </div>`;
+
+  const data = await fetchChapterData(bookName, chapter);
+  if (!data) {
+    box.innerHTML = `
+      <p class="fetch-msg" style="color:#e55">불러오기 실패</p>
+      <p class="fetch-sub">인터넷 연결을 확인하거나 잠시 후 다시 시도해주세요.</p>
+      <button class="fetch-btn" id="fetch-btn-retry">다시 시도</button>`;
+    mainEl.querySelector('#fetch-btn-retry')?.addEventListener('click',
+      () => fetchAndShowChapter(bookName, chapter, targetVerse));
+    return;
+  }
+
+  // 성공 → 뷰 다시 렌더
+  state.selectedVerse = targetVerse;
+  renderReading();
+}
+
+/* =========================================================
+   전체 성경 다운로드
+   ========================================================= */
+async function startFullDownload() {
+  if (state.downloading) return;
+  state.downloading = true;
+
+  const allBooks = [...BOOKS_OT, ...BOOKS_NT];
+  const chapters = [];
+  allBooks.forEach(b => {
+    for (let c = 1; c <= b.ch; c++) {
+      if (!isChapterCached(b.id, c) && !(BIBLE_TEXT[b.id]?.[c] && Object.keys(BIBLE_TEXT[b.id][c]).length >= 5)) {
+        chapters.push({ book: b.id, ch: c });
+      }
+    }
+  });
+
+  if (chapters.length === 0) {
+    alert('모든 장이 이미 저장되어 있습니다!');
+    state.downloading = false;
+    return;
+  }
+
+  // 진행률 오버레이 표시
+  showDownloadOverlay(0, chapters.length);
+
+  let done = 0;
+  let failed = 0;
+
+  for (const { book, ch } of chapters) {
+    const data = await fetchChapterData(book, ch);
+    if (data) done++; else failed++;
+    updateDownloadOverlay(done + failed, chapters.length, done, failed);
+    await sleep(120); // rate limit 방지
+  }
+
+  state.downloading = false;
+  hideDownloadOverlay(done, failed);
+  render();
+}
+
+/* =========================================================
+   다운로드 오버레이 UI
+   ========================================================= */
+function showDownloadOverlay(done, total) {
+  let ov = document.getElementById('dl-overlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'dl-overlay';
+    ov.className = 'dl-overlay';
+    document.getElementById('app').appendChild(ov);
+  }
+  ov.innerHTML = downloadOverlayHTML(done, total, 0, 0);
+}
+
+function updateDownloadOverlay(done, total, ok, fail) {
+  const ov = document.getElementById('dl-overlay');
+  if (ov) ov.innerHTML = downloadOverlayHTML(done, total, ok, fail);
+}
+
+function hideDownloadOverlay(ok, fail) {
+  const ov = document.getElementById('dl-overlay');
+  if (!ov) return;
+  ov.innerHTML = `
+    <div class="dl-ov-inner">
+      <div class="dl-ov-done">✓</div>
+      <p style="font-weight:700;font-size:17px">다운로드 완료</p>
+      <p style="color:#888;font-size:13px;margin-top:4px">${ok}장 저장 완료 · 오류 ${fail}장</p>
+      <button class="fetch-btn" style="margin-top:20px" id="dl-close">닫기</button>
+    </div>`;
+  ov.querySelector('#dl-close').addEventListener('click', () => ov.remove());
+}
+
+function downloadOverlayHTML(done, total, ok, fail) {
+  const pct = total > 0 ? Math.round(done / total * 100) : 0;
+  return `
+    <div class="dl-ov-inner">
+      <p style="font-weight:700;font-size:16px;margin-bottom:16px">성경 전체 다운로드 중</p>
+      <div class="dl-bar-bg"><div class="dl-bar-fill" style="width:${pct}%"></div></div>
+      <p class="dl-pct">${pct}% &nbsp;·&nbsp; ${done}/${total}장</p>
+      ${fail > 0 ? `<p style="font-size:12px;color:#e55;margin-top:4px">오류 ${fail}장</p>` : ''}
+      <p style="font-size:12px;color:#bbb;margin-top:8px">앱을 종료하지 마세요</p>
+    </div>`;
+}
+
+/* =========================================================
+   검색
+   ========================================================= */
+function renderSearch() {
+  mainEl.innerHTML = `
+    <div class="search-top">
+      <div class="search-input-wrap">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <circle cx="11" cy="11" r="7.5" stroke="currentColor" stroke-width="2"/>
+          <path d="m21 21-4.5-4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <input id="search-input" type="search" placeholder="검색어 2자 이상 입력"
+          autocomplete="off" autocorrect="off" spellcheck="false"
+          value="${escHtml(state.searchQuery)}">
+      </div>
+    </div>
+    <div id="search-body"></div>`;
+
+  const input = mainEl.querySelector('#search-input');
+  input.focus();
+  input.selectionStart = input.selectionEnd = input.value.length;
+
+  input.addEventListener('input', e => {
+    state.searchQuery = e.target.value;
+    clearTimeout(state.searchDebounce);
+    state.searchDebounce = setTimeout(updateSearchResults, 300);
+  });
+  updateSearchResults();
+}
+
+function updateSearchResults() {
+  const body = mainEl.querySelector('#search-body');
+  if (!body) return;
+  const q = state.searchQuery.trim();
+
+  if (q.length < 2) {
+    body.innerHTML = `
+      <div class="search-hint">
+        <svg viewBox="0 0 24 24" fill="none">
+          <circle cx="11" cy="11" r="7.5" stroke="currentColor" stroke-width="1.5"/>
+          <path d="m21 21-4.5-4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <p>검색어를 2글자 이상 입력하면<br>해당 내용이 포함된 구절이 표시됩니다.</p>
+      </div>`;
+    return;
+  }
+
+  body.innerHTML = `<div class="search-hint"><div class="spinner" style="margin:0 auto"></div></div>`;
+
+  // 다음 프레임에서 검색 (UI 블로킹 방지)
+  requestAnimationFrame(() => {
+    const results = searchBible(q);
+    if (!mainEl.querySelector('#search-body')) return;
+
+    if (results.length === 0) {
+      body.innerHTML = `
+        <div class="no-result">
+          「${escHtml(q)}」 검색 결과 없음<br>
+          <small style="color:#ddd">저장된 장에서만 검색됩니다</small>
+        </div>`;
+      return;
+    }
+
+    let html = `<div class="search-count">${results.length}개의 구절</div>`;
+    results.forEach(r => {
+      html += `
+        <div class="search-result-item"
+          data-book="${escHtml(r.book)}" data-ch="${r.chapter}" data-v="${r.verse}">
+          <div class="result-ref">${r.book} ${r.chapter}:${r.verse}</div>
+          <div class="result-text">${highlightText(r.text, q)}</div>
+        </div>`;
+    });
+    body.innerHTML = html;
+
+    body.querySelectorAll('.search-result-item').forEach(el =>
+      el.addEventListener('click', () =>
+        navigateToVerse(el.dataset.book, parseInt(el.dataset.ch), parseInt(el.dataset.v))));
+  });
+}
+
+function navigateToVerse(bookId, chapter, verse) {
+  const all  = [...BOOKS_OT, ...BOOKS_NT];
+  const book = all.find(b => b.id === bookId);
+  if (!book) return;
+  const isOT = BOOKS_OT.some(b => b.id === bookId);
+  state.currentTab     = isOT ? 'ot' : 'nt';
+  state.currentView    = 'reading';
+  state.selectedBook   = book;
+  state.selectedChapter = chapter;
+  state.selectedVerse  = verse;
+  navBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === state.currentTab));
+  render();
+}
+
+/* =========================================================
+   유틸
+   ========================================================= */
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function highlightText(text, query) {
+  const escaped = escHtml(text);
+  const pattern = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return escaped.replace(new RegExp(pattern, 'gi'), m => `<mark>${m}</mark>`);
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+/* =========================================================
+   설정 시트
+   ========================================================= */
+const settingsBtn      = document.getElementById('settings-btn');
+const settingsSheet    = document.getElementById('settings-sheet');
+const settingsBackdrop = document.getElementById('settings-backdrop');
+
+settingsBtn.addEventListener('click', openSettings);
+settingsBackdrop.addEventListener('click', closeSettings);
+
+function openSettings() {
+  settingsSheet.innerHTML = buildSettingsHTML();
+  settingsSheet.classList.remove('hidden');
+  settingsBackdrop.classList.remove('hidden');
+
+  // 이벤트 바인딩
+  settingsSheet.querySelector('#close-sheet-btn')
+    ?.addEventListener('click', closeSettings);
+  settingsSheet.querySelector('#delete-cache-btn')
+    ?.addEventListener('click', confirmDeleteCache);
+}
+
+function closeSettings() {
+  settingsSheet.classList.add('hidden');
+  settingsBackdrop.classList.add('hidden');
+}
+
+/* ── 설정 HTML 빌드 ──────────────────────────── */
+function buildSettingsHTML() {
+  const allBooks     = [...BOOKS_OT, ...BOOKS_NT];
+  const totalChaps   = allBooks.reduce((s, b) => s + b.ch, 0);   // 1189
+  const cachedChaps  = getCachedStats();
+  const pct          = Math.round(cachedChaps / totalChaps * 100);
+
+  // 용량 추산 (장당 평균 ~2.5 KB)
+  const approxKB     = Math.round(cachedChaps * 2.5);
+  const approxStr    = approxKB >= 1024
+    ? `약 ${(approxKB / 1024).toFixed(1)} MB`
+    : `약 ${approxKB} KB`;
+
+  const transSlug = `<span style="color:#555">Korean (getbible.net)</span>`;
+
+  const barW = Math.max(pct, 2);
+
+  return `
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">설정</div>
+
+    <!-- ① 저장 위치 -->
+    <div class="settings-section">
+      <div class="settings-section-label">저장 위치</div>
+      <div class="path-box">
+        <div class="path-row">
+          <span class="path-os android">Android</span>
+          <span class="path-text">Chrome: /data/data/com.android.chrome/app_chrome/Default/Local Storage/leveldb/<br>Samsung: /data/data/com.sec.android.app.sbrowser/app_sbrowser/Default/Local Storage/</span>
+        </div>
+        <div class="path-row">
+          <span class="path-os ios">iOS</span>
+          <span class="path-text">Safari: 앱 샌드박스 내 WebKit/WebsiteData/LocalStorage/</span>
+        </div>
+        <p class="path-note">
+          ⚠️ 브라우저 앱의 내부(비공개) 영역입니다.<br>
+          파일 관리자·파인더에서는 보이지 않으며,<br>
+          루트 권한 없이는 직접 접근할 수 없습니다.<br>
+          삭제는 아래 버튼 또는 브라우저 설정에서 가능합니다.
+        </p>
+      </div>
+    </div>
+
+    <!-- ② 저장 현황 -->
+    <div class="settings-section">
+      <div class="settings-section-label">저장 현황</div>
+      <div class="storage-stat">
+        <div class="stat-row">
+          <span class="stat-label">저장된 장</span>
+          <span class="stat-value">${cachedChaps} / ${totalChaps}장</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">추정 용량</span>
+          <span class="stat-value">${approxStr}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">번역본</span>
+          <span class="stat-value" style="font-size:12px">${transSlug}</span>
+        </div>
+        <div class="stat-bar-bg">
+          <div class="stat-bar-fill" style="width:${barW}%"></div>
+        </div>
+        <p style="font-size:11px;color:#bbb;margin-top:6px;text-align:right">${pct}% 저장 완료</p>
+      </div>
+    </div>
+
+    <!-- ③ 버튼 -->
+    <div class="settings-btn-row">
+      <button class="settings-action-btn danger" id="delete-cache-btn">
+        저장 데이터 삭제
+      </button>
+      <button class="settings-action-btn normal" id="close-sheet-btn">
+        닫기
+      </button>
+    </div>`;
+}
+
+/* ── 삭제 확인 다이얼로그 ─────────────────────── */
+function confirmDeleteCache() {
+  const cached = getCachedStats();
+  if (cached === 0) {
+    showToast('삭제할 데이터가 없습니다');
+    return;
+  }
+
+  const ov = document.createElement('div');
+  ov.className = 'confirm-overlay';
+  ov.innerHTML = `
+    <div class="confirm-box">
+      <div class="confirm-body">
+        <strong>저장 데이터 삭제</strong>
+        <p>다운로드한 성경 본문 ${cached}장이 모두 삭제됩니다.<br>
+        다시 읽으려면 인터넷 연결이 필요합니다.</p>
+      </div>
+      <div class="confirm-buttons">
+        <div class="confirm-btn cancel" id="confirm-cancel">취소</div>
+        <div class="confirm-btn ok"     id="confirm-ok">삭제</div>
+      </div>
+    </div>`;
+
+  document.getElementById('app').appendChild(ov);
+  ov.querySelector('#confirm-cancel').addEventListener('click', () => ov.remove());
+  ov.querySelector('#confirm-ok').addEventListener('click', () => {
+    deleteCachedData();
+    ov.remove();
+    closeSettings();
+    render();
+    showToast('저장 데이터를 모두 삭제했습니다');
+  });
+}
+
+function deleteCachedData() {
+  const keysToDelete = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith(LS_PREFIX)) keysToDelete.push(key);
+  }
+  keysToDelete.forEach(k => localStorage.removeItem(k));
+}
+
+/* ── 토스트 메시지 ───────────────────────────── */
+function showToast(msg) {
+  const existing = document.getElementById('toast');
+  if (existing) existing.remove();
+
+  const t = document.createElement('div');
+  t.id = 'toast';
+  t.textContent = msg;
+  t.style.cssText = `
+    position:absolute; bottom:76px; left:50%; transform:translateX(-50%);
+    background:#222; color:#fff; font-size:13px; line-height:1.5;
+    padding:10px 18px; border-radius:10px; z-index:400;
+    white-space:pre-line; text-align:center;
+    box-shadow:0 2px 12px rgba(0,0,0,0.2);
+    animation: fadeInUp 0.2s ease;`;
+  document.getElementById('app').appendChild(t);
+
+  setTimeout(() => t.remove(), 2800);
+}
+
+/* toast 애니메이션 */
+const toastStyle = document.createElement('style');
+toastStyle.textContent = `
+  @keyframes fadeInUp {
+    from { opacity:0; transform:translateX(-50%) translateY(8px); }
+    to   { opacity:1; transform:translateX(-50%) translateY(0); }
+  }`;
+document.head.appendChild(toastStyle);
