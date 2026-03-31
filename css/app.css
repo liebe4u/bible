@@ -8,6 +8,7 @@
 
 html, body {
   height: 100%;
+  overflow: hidden; /* 바디 레벨 스크롤 차단 */
   font-family: 'Pretendard Variable', Pretendard,
     -apple-system, BlinkMacSystemFont,
     'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
@@ -15,6 +16,9 @@ html, body {
   background: #fff;
   color: #111;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  -webkit-text-size-adjust: 100%;
 }
 
 button { cursor: pointer; border: none; background: none; font-family: inherit; }
@@ -24,12 +28,17 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
   display: flex;
   flex-direction: column;
   height: 100dvh;
-  height: 100vh;
+  height: 100vh;          /* 구형 브라우저 fallback */
   max-width: 480px;
   margin: 0 auto;
   background: #fff;
   position: relative;
   overflow: hidden;
+}
+
+/* dvh 미지원 브라우저에서도 높이 고정 */
+@supports (height: 100dvh) {
+  #app { height: 100dvh; }
 }
 
 /* ── Header ───────────────────────────────────── */
@@ -75,19 +84,31 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
 /* ── Main Content ─────────────────────────────── */
 #main-content {
   flex: 1;
+  min-height: 0;          /* flex 자식이 컨테이너를 넘치는 것을 차단 */
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
+  /* 하단 탭 높이만큼 패딩 (fixed nav와 겹침 방지) */
+  padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px));
 }
 
 /* ── Bottom Navigation ────────────────────────── */
 #bottom-nav {
+  position: fixed;
+  bottom: 0;
+  /* transform 없이 중앙 정렬 — 서브픽셀 번짐 방지 */
+  left: 0;
+  right: 0;
+  width: 100%;
+  max-width: 480px;
+  margin-left: auto;
+  margin-right: auto;
   display: flex;
   height: 60px;
   background: #fff;
   border-top: 1px solid #eaeaea;
-  flex-shrink: 0;
   padding-bottom: env(safe-area-inset-bottom, 0px);
+  z-index: 50;
 }
 
 .nav-btn {
@@ -167,7 +188,7 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
 
 /* ── Reading View ─────────────────────────────── */
 .reading-wrap {
-  padding: 16px 16px 80px;
+  padding: 16px 16px 24px;
 }
 
 .reading-title {
@@ -187,6 +208,7 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
 
 .verse-row {
   display: flex;
+  align-items: flex-start;
   gap: 10px;
   padding: 4px 6px;
   border-radius: 6px;
@@ -197,21 +219,63 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
   background: rgba(208, 255, 50, 0.38);
 }
 
+/* ── 절 마커 (번호 / 책갈피 아이콘 영역) ─────── */
+.verse-marker {
+  flex-shrink: 0;
+  width: 26px;
+  min-width: 26px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 4px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .verse-num {
   font-size: 11px;
-  font-weight: 700;
   color: #bbb;
-  min-width: 22px;
-  padding-top: 4px;
-  text-align: right;
-  flex-shrink: 0;
   line-height: 1.6;
+  text-align: center;
 }
+
+.bm-icon {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: #ccc;
+  width: 15px;
+  height: 22px;
+}
+.bm-icon svg { width: 15px; height: 22px; }
+
+/* BM 선택 모드 전환 */
+.reading-wrap.bm-mode .verse-num    { display: none; }
+.reading-wrap.bm-mode .bm-icon      { display: flex; }
+.reading-wrap.bm-mode .verse-marker { cursor: pointer; }
+.reading-wrap.bm-mode .verse-marker:active { opacity: 0.45; }
+
+.bm-hint-bar { display: none; }
+
+/* 이미 책갈피된 구절: 아이콘 채움 색상 */
+.verse-row.bm-saved .bm-icon { color: #e0a0b0; }
+
+/* ── 구절 텍스트 ──────────────────────────────── */
 .verse-text {
   font-size: 16px;
   line-height: 1.85;
   color: #1a1a1a;
   word-break: keep-all;
+  flex: 1;
+}
+
+/* 책갈피된 구절 표시 */
+.verse-row.bm-saved .verse-num {
+  color: #e0a0b0;
+  font-weight: 900;
+}
+.verse-row.bm-saved .verse-text {
+  color: #c9849a;
 }
 
 .no-text-box {
@@ -413,7 +477,7 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
 
 /* ── Download overlay ─────────────────────────── */
 .dl-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
   background: rgba(255,255,255,0.96);
   display: flex;
@@ -451,7 +515,7 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
 
 /* ── Settings sheet ──────────────────────────── */
 .settings-backdrop {
-  position: absolute;
+  position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.35);
   z-index: 200;
@@ -460,18 +524,22 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
 .settings-backdrop.hidden { display: none; }
 
 .settings-sheet {
-  position: absolute;
+  position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+  max-width: 480px;
   background: #fff;
   border-radius: 18px 18px 0 0;
   z-index: 201;
   padding-bottom: env(safe-area-inset-bottom, 0px);
-  transform: translateY(0);
   transition: transform 0.28s cubic-bezier(0.32,0.72,0,1);
   max-height: 80vh;
   overflow-y: auto;
+  transform: translateY(0);
 }
 .settings-sheet.hidden {
   transform: translateY(100%);
@@ -604,7 +672,7 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
 
 /* 확인 다이얼로그 */
 .confirm-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.5);
   z-index: 300;
@@ -639,6 +707,94 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
 .confirm-btn.cancel { color: #888; border-right: 1px solid #f0f0f0; }
 .confirm-btn.ok     { color: #d44; font-weight: 700; }
 .confirm-btn:active { background: #f8f8f8; }
+
+/* ── 책갈피 목록 (검색 탭) ───────────────────── */
+.bm-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 24px 20px;
+  color: #ccc;
+  text-align: center;
+}
+.bm-empty p    { font-size: 14px; color: #bbb; }
+.bm-empty span { font-size: 12px; color: #d0d0d0; line-height: 1.5; }
+
+.bm-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px 4px;
+}
+.bm-clear-btn {
+  font-size: 12px;
+  color: #bbb;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background 0.12s;
+}
+.bm-clear-btn:active { background: #f5f5f5; color: #d44; }
+
+.bm-item {
+  position: relative;
+  padding: 13px 44px 13px 16px;
+  border-bottom: 1px solid #f2f2f2;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.bm-item:active { background: #f8f8f8; }
+
+.bm-group-header {
+  padding: 10px 16px 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #555;
+  background: #f7f7f7;
+  border-top: 1px solid #ececec;
+  border-bottom: 1px solid #ececec;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.bm-item-ref {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 4px;
+}
+.bm-item-date {
+  font-size: 11px;
+  font-weight: 400;
+  color: #bbb;
+  margin-left: 5px;
+}
+.bm-item-text {
+  font-size: 14px;
+  line-height: 1.65;
+  color: #222;
+  word-break: keep-all;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.bm-delete-btn {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ccc;
+  border-radius: 6px;
+  transition: color 0.12s, background 0.12s;
+}
+.bm-delete-btn:active { color: #d44; background: #fff0f0; }
 
 /* ── Scrollbar ────────────────────────────────── */
 ::-webkit-scrollbar { width: 3px; }

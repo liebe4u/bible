@@ -16,7 +16,9 @@ const state = {
   selectedVerse:   null,
   searchQuery:     '',
   searchDebounce:  null,
-  downloading:     false
+  downloading:     false,
+  bmMode:             false,  // 책갈피 선택 모드
+  bmIgnoreNextClick:  false   // 롱프레스 해제 click 오발 방지 플래그
 };
 
 /* ── DOM ─────────────────────────────────────────── */
@@ -31,6 +33,16 @@ navBtns.forEach(btn => {
   btn.addEventListener('click', () => switchTab(btn.dataset.tab));
 });
 backBtn.addEventListener('click', goBack);
+
+// 안드로이드 하드웨어 뒤로가기 버튼 처리
+window.addEventListener('popstate', () => {
+  const isDeep = state.currentTab !== 'search' && state.currentView !== 'books';
+  if (isDeep) {
+    goBack();
+  }
+  // goBack() 내부에서 render()가 호출되고, render()에서 isDeep이면 다시 pushState됨
+});
+
 switchTab('ot');
 
 /* =========================================================
@@ -128,6 +140,7 @@ function selectBook(bookId) {
   state.currentView   = 'chapters';
   state.selectedChapter = null;
   state.selectedVerse = null;
+  history.pushState({ bibleNav: true }, '');
   render();
 }
 
@@ -158,6 +171,7 @@ function selectChapter(chapter) {
   state.selectedChapter = chapter;
   state.currentView = 'verses';
   state.selectedVerse = null;
+  history.pushState({ bibleNav: true }, '');
   render();
 }
 
@@ -187,6 +201,7 @@ function renderVerses() {
 function selectVerse(verse) {
   state.selectedVerse = verse;
   state.currentView   = 'reading';
+  history.pushState({ bibleNav: true }, '');
   render();
 }
 
@@ -199,25 +214,38 @@ function renderReading() {
   const target = state.selectedVerse;
   const total  = getVerseCount(book.id, ch);
   titleEl.textContent = `${book.id} ${ch}장`;
+  state.bmMode = false;
 
   const hasData = hasChapterData(book.id, ch);
 
-  let html = `<div class="reading-wrap">
+  let html = `<div class="reading-wrap" id="reading-wrap">
     <div class="reading-title">${book.id}</div>
-    <div class="reading-subtitle">${ch}장</div>`;
+    <div class="reading-subtitle">${ch}장</div>
+    <div class="bm-hint-bar">책갈피 선택 후 아무 곳이나 탭하세요</div>`;
 
   if (hasData) {
     for (let v = 1; v <= total; v++) {
       const text = getVerseText(book.id, ch, v);
       if (!text) continue;
-      const isT = v === target;
-      html += `<div class="verse-row${isT ? ' target-verse' : ''}" id="v-${v}">
-        <span class="verse-num">${v}</span>
-        <span class="verse-text">${escHtml(text)}</span>
-      </div>`;
+      const isT    = v === target;
+      const marked = isBookmarked(book.id, ch, v);
+      html += `
+        <div class="verse-row${isT ? ' target-verse' : ''}${marked ? ' bm-saved' : ''}" id="v-${v}"
+          data-book="${escHtml(book.id)}" data-ch="${ch}" data-v="${v}" data-text="${escHtml(text)}">
+          <div class="verse-marker">
+            <span class="verse-num">${v}</span>
+            <span class="bm-icon">
+              <svg viewBox="0 0 24 24" fill="${marked ? 'currentColor' : 'none'}">
+                <path d="M5 3h14a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"
+                  stroke="currentColor" stroke-width="1.3"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>
+          </div>
+          <span class="verse-text">${escHtml(text)}</span>
+        </div>`;
     }
   } else {
-    // 데이터 없음 → 가져오기 버튼
     html += `
       <div class="fetch-box" id="fetch-box">
         <div class="fetch-icon">
@@ -251,6 +279,72 @@ function renderReading() {
 
   const fetchBtn = mainEl.querySelector('#fetch-btn');
   if (fetchBtn) fetchBtn.addEventListener('click', () => fetchAndShowChapter(book.id, ch, target));
+
+  if (hasData) attachVerseHandlers();
+}
+
+/* =========================================================
+   책갈피 선택 모드 — 롱프레스 UX
+   ========================================================= */
+function attachVerseHandlers() {
+  const wrap = mainEl.querySelector('#reading-wrap');
+  if (!wrap) return;
+
+  let pressTimer = null;
+  let pressStartY = 0;
+
+  wrap.addEventListener('contextmenu', e => e.preventDefault());
+
+  mainEl.querySelectorAll('.verse-row').forEach(row => {
+    // 롱프레스 감지
+    row.addEventListener('pointerdown', e => {
+      pressStartY = e.clientY;
+      pressTimer = setTimeout(() => {
+        pressTimer = null;
+        if (!state.bmMode) {
+          state.bmMode            = true;
+          state.bmIgnoreNextClick = true; // 롱프레스 해제 시 발생하는 click 무시
+          wrap.classList.add('bm-mode');
+          if (navigator.vibrate) navigator.vibrate(30);
+          showToast('원하는 구절 선택 후 아무 곳이나 선택하면 저장됩니다');
+        }
+      }, 500);
+    });
+
+    row.addEventListener('pointermove', e => {
+      if (Math.abs(e.clientY - pressStartY) > 8) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+      }
+    });
+    row.addEventListener('pointerup',     () => { clearTimeout(pressTimer); pressTimer = null; });
+    row.addEventListener('pointercancel', () => { clearTimeout(pressTimer); pressTimer = null; });
+
+    // 절 번호(마커) 탭 → 책갈피 토글
+    const marker = row.querySelector('.verse-marker');
+    marker.addEventListener('click', e => {
+      if (!state.bmMode) return;
+      e.stopPropagation();
+      const { book, ch, v, text } = row.dataset;
+      const saved = toggleBookmark(book, parseInt(ch), parseInt(v), text);
+      row.classList.toggle('bm-saved', saved);
+      const path = row.querySelector('.bm-icon svg path');
+      if (path) path.setAttribute('fill', saved ? 'currentColor' : 'none');
+    });
+
+    // 구절 텍스트 탭 → 선택 모드 종료
+    // (롱프레스 직후 발생하는 첫 click은 bmIgnoreNextClick 플래그로 무시)
+    row.querySelector('.verse-text').addEventListener('click', () => {
+      if (!state.bmMode) return;
+      if (state.bmIgnoreNextClick) { state.bmIgnoreNextClick = false; return; }
+      exitBmMode(wrap);
+    });
+  });
+}
+
+function exitBmMode(wrap) {
+  state.bmMode = false;
+  wrap.classList.remove('bm-mode');
 }
 
 /* =========================================================
@@ -428,14 +522,7 @@ function updateSearchResults() {
   const q = state.searchQuery.trim();
 
   if (q.length < 2) {
-    body.innerHTML = `
-      <div class="search-hint">
-        <svg viewBox="0 0 24 24" fill="none">
-          <circle cx="11" cy="11" r="7.5" stroke="currentColor" stroke-width="1.5"/>
-          <path d="m21 21-4.5-4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-        <p>검색어를 2글자 이상 입력하면<br>해당 내용이 포함된 구절이 표시됩니다.</p>
-      </div>`;
+    renderBookmarkList(body);
     return;
   }
 
@@ -477,12 +564,15 @@ function navigateToVerse(bookId, chapter, verse) {
   const book = all.find(b => b.id === bookId);
   if (!book) return;
   const isOT = BOOKS_OT.some(b => b.id === bookId);
-  state.currentTab     = isOT ? 'ot' : 'nt';
-  state.currentView    = 'reading';
-  state.selectedBook   = book;
+  state.currentTab      = isOT ? 'ot' : 'nt';
+  state.selectedBook    = book;
   state.selectedChapter = chapter;
-  state.selectedVerse  = verse;
+  state.selectedVerse   = verse;
   navBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === state.currentTab));
+  // 중간 단계 스택 push: 책→장→절→읽기 순으로 쌓아야 뒤로가기가 단계별로 동작
+  state.currentView = 'chapters'; history.pushState({ bibleNav: true }, '');
+  state.currentView = 'verses';   history.pushState({ bibleNav: true }, '');
+  state.currentView = 'reading';  history.pushState({ bibleNav: true }, '');
   render();
 }
 
@@ -502,6 +592,112 @@ function highlightText(text, query) {
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+/* =========================================================
+   책갈피 목록 렌더 (검색탭 — 쿼리 없을 때)
+   ========================================================= */
+function formatSavedAt(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${yy}.${mm}.${dd} ${hh}:${mi}`;
+}
+
+function renderBookmarkList(body) {
+  const list = loadBookmarks();
+
+  if (list.length === 0) {
+    body.innerHTML = `
+      <div class="bm-empty">
+        <svg viewBox="0 0 24 24" fill="none" width="36" height="36">
+          <path d="M5 3h14a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"
+            stroke="currentColor" stroke-width="1.3"
+            stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <p>저장된 책갈피가 없습니다</p>
+        <span>구절을 길게 눌러 책갈피를 저장하세요</span>
+      </div>
+      <div class="search-hint" style="padding-top:0">
+        <p style="color:#ccc;font-size:13px">검색어를 2글자 이상 입력하면<br>구절 검색이 시작됩니다</p>
+      </div>`;
+    return;
+  }
+
+  // 책 순서 기준으로 정렬 (책 → 장 → 절)
+  const ALL_BOOKS = [...BOOKS_OT, ...BOOKS_NT].map(b => b.id);
+  const sorted = [...list].sort((a, b) => {
+    const bi = ALL_BOOKS.indexOf(a.book) - ALL_BOOKS.indexOf(b.book);
+    if (bi !== 0) return bi;
+    if (a.chapter !== b.chapter) return a.chapter - b.chapter;
+    return a.verse - b.verse;
+  });
+
+  // 책 단위로 그룹화
+  const groups = [];
+  sorted.forEach(item => {
+    const last = groups[groups.length - 1];
+    if (last && last.book === item.book) {
+      last.items.push(item);
+    } else {
+      groups.push({ book: item.book, items: [item] });
+    }
+  });
+
+  let html = `<div class="bm-list-header">
+    <span class="search-count" style="padding:0">책갈피 ${list.length}개</span>
+    <button class="bm-clear-btn" id="bm-clear-all">전체 삭제</button>
+  </div>`;
+
+  groups.forEach(group => {
+    html += `<div class="bm-group-header">${escHtml(group.book)}</div>`;
+    group.items.forEach(b => {
+      html += `
+        <div class="bm-item"
+          data-book="${escHtml(b.book)}" data-ch="${b.chapter}" data-v="${b.verse}">
+          <div class="bm-item-ref">${b.chapter}장 ${b.verse}절<span class="bm-item-date">(${formatSavedAt(b.savedAt)})</span></div>
+          <div class="bm-item-text">${escHtml(b.text)}</div>
+          <button class="bm-delete-btn" aria-label="삭제">
+            <svg viewBox="0 0 24 24" fill="none" width="16" height="16">
+              <path d="M18 6 6 18M6 6l12 12"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>`;
+    });
+  });
+
+  body.innerHTML = html;
+
+  // 항목 클릭 → 구절 이동
+  body.querySelectorAll('.bm-item').forEach(el => {
+    el.addEventListener('click', e => {
+      if (e.target.closest('.bm-delete-btn')) return;
+      navigateToVerse(el.dataset.book, parseInt(el.dataset.ch), parseInt(el.dataset.v));
+    });
+  });
+
+  // 개별 삭제
+  body.querySelectorAll('.bm-delete-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const item = btn.closest('.bm-item');
+      removeBookmark(item.dataset.book, parseInt(item.dataset.ch), parseInt(item.dataset.v));
+      renderBookmarkList(body);
+    });
+  });
+
+  // 전체 삭제
+  body.querySelector('#bm-clear-all')?.addEventListener('click', () => {
+    if (confirm(`책갈피 ${list.length}개를 모두 삭제할까요?`)) {
+      saveBookmarks([]);
+      renderBookmarkList(body);
+    }
+  });
+}
 
 /* =========================================================
    설정 시트
@@ -658,7 +854,7 @@ function showToast(msg) {
   t.id = 'toast';
   t.textContent = msg;
   t.style.cssText = `
-    position:absolute; bottom:76px; left:50%; transform:translateX(-50%);
+    position:fixed; bottom:76px; left:50%; transform:translateX(-50%);
     background:#222; color:#fff; font-size:13px; line-height:1.5;
     padding:10px 18px; border-radius:10px; z-index:400;
     white-space:pre-line; text-align:center;

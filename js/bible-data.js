@@ -304,7 +304,51 @@ const BOOK_NUMBERS = {
 };
 
 /* ── localStorage 캐시 유틸 ─────────────────────── */
-const LS_PREFIX = 'bk_';
+const LS_PREFIX    = 'bk_';
+const LS_BOOKMARKS = 'bible_bookmarks';
+
+/* ── 책갈피 유틸 ────────────────────────────────── */
+function loadBookmarks() {
+  try {
+    return JSON.parse(localStorage.getItem(LS_BOOKMARKS) || '[]');
+  } catch (e) { return []; }
+}
+
+function saveBookmarks(list) {
+  try {
+    localStorage.setItem(LS_BOOKMARKS, JSON.stringify(list));
+  } catch (e) { console.warn('책갈피 저장 실패', e); }
+}
+
+function isBookmarked(bookName, chapter, verse) {
+  return loadBookmarks().some(
+    b => b.book === bookName && b.chapter === chapter && b.verse === verse
+  );
+}
+
+function addBookmark(bookName, chapter, verse, text) {
+  const list = loadBookmarks().filter(
+    b => !(b.book === bookName && b.chapter === chapter && b.verse === verse)
+  );
+  list.unshift({ book: bookName, chapter, verse, text, savedAt: Date.now() });
+  saveBookmarks(list);
+}
+
+function removeBookmark(bookName, chapter, verse) {
+  saveBookmarks(loadBookmarks().filter(
+    b => !(b.book === bookName && b.chapter === chapter && b.verse === verse)
+  ));
+}
+
+function toggleBookmark(bookName, chapter, verse, text) {
+  if (isBookmarked(bookName, chapter, verse)) {
+    removeBookmark(bookName, chapter, verse);
+    return false; // 해제
+  } else {
+    addBookmark(bookName, chapter, verse, text);
+    return true;  // 저장
+  }
+}
 
 function saveChapterToLocal(bookName, chapter, versesObj) {
   try {
