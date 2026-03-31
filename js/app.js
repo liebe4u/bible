@@ -961,6 +961,8 @@ function buildSettingsHTML() {
       <button class="settings-action-btn danger" id="delete-cache-btn">
         저장 데이터 삭제
       </button>
+    </div>
+    <div class="settings-btn-group settings-btn-group--separated">
       <button class="settings-action-btn normal" id="reload-btn">
         데이터 새로고침
       </button>
