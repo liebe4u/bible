@@ -604,11 +604,11 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
 
 /* 설정 탭 전체 페이지 래퍼 */
 .settings-page {
-  padding: 8px 0 24px;
+  padding: 8px 20px 24px;
 }
 
 .settings-section {
-  padding: 14px 20px 4px;
+  padding: 14px 0 4px;
 }
 .settings-section-label {
   font-size: 11px;
@@ -692,13 +692,18 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
 
 /* 설정 버튼들 */
 .settings-btn-row {
-  padding: 6px 20px 20px;
+  padding: 6px 0 20px;
 }
 .settings-btn-group {
-  padding: 6px 20px 24px;
+  padding: 6px 0 4px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
+}
+.settings-btn-group--separated {
+  padding-top: 20px;
+  border-top: 1px solid #f0f0f0;
+  margin-top: 8px;
 }
 .settings-action-btn {
   width: 100%;
