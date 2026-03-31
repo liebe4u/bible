@@ -146,21 +146,13 @@ function renderBooks() {
   mainEl.innerHTML = html;
   mainEl.scrollTop = 0;
 
-  // 필터 입력창 이벤트 (compositionend 로 한글 IME 조합 완료 후 처리)
+  // 필터 입력창 이벤트 — input 이벤트만 사용 (DOM 재생성 없으므로 IME 안전)
   const inp = mainEl.querySelector('#book-filter-input');
   if (inp) {
     inp.value = state.bookFilter;
     inp.focus();
 
-    let composing = false;
-    inp.addEventListener('compositionstart', () => { composing = true; });
-    inp.addEventListener('compositionend', e => {
-      composing = false;
-      state.bookFilter = e.target.value;
-      renderBookList();
-    });
     inp.addEventListener('input', e => {
-      if (composing) return; // IME 조합 중엔 무시
       state.bookFilter = e.target.value;
       renderBookList();
     });
@@ -653,16 +645,8 @@ function renderSearch() {
   const input = mainEl.querySelector('#search-input');
   input.selectionStart = input.selectionEnd = input.value.length;
 
-  let searchComposing = false;
-  input.addEventListener('compositionstart', () => { searchComposing = true; });
-  input.addEventListener('compositionend', e => {
-    searchComposing = false;
-    state.searchQuery = e.target.value;
-    clearTimeout(state.searchDebounce);
-    state.searchDebounce = setTimeout(updateSearchResults, 300);
-  });
+  // input 이벤트만 사용 — e.target.value는 조합 중인 글자도 포함해 실시간 반영
   input.addEventListener('input', e => {
-    if (searchComposing) return;
     state.searchQuery = e.target.value;
     clearTimeout(state.searchDebounce);
     state.searchDebounce = setTimeout(updateSearchResults, 300);
