@@ -1,11 +1,18 @@
 /* =========================================================
    app.js  —  개역한글 성경 앱 메인 로직
-   오프라인 캐싱: getbible.net API → localStorage → 오프라인 사용
+   온라인: 리모트 서버에서 실시간 로딩
+   오프라인: 설정에서 전체 다운로드 후 localStorage 사용
    ========================================================= */
 
-/* ── 상수 ────────────────────────────────────────── */
-const GETBIBLE_API = 'https://api.getbible.net/v2/korean'; // 한국어 고정
-const TOTAL_CHAPS  = 1189; // 구약 929 + 신약 260
+/* ── 서버 설정 ────────────────────────────────────
+   BIBLE_SERVER: 성경 데이터를 서비스하는 서버 URL (마지막 / 제외)
+   - 비워두면 현재 앱과 같은 도메인의 /bible/ 경로 사용
+   - 예: 'https://my-bible.vercel.app' 또는 'https://my-server.com'
+   데이터 생성: node scripts/generate-bible-data.js 실행 후 bible/ 업로드
+   ─────────────────────────────────────────────── */
+const BIBLE_SERVER    = '';  // ← 별도 서버 사용 시 URL 입력
+const LS_SEARCH_IDX   = 'bible_search_idx'; // 검색 인덱스 localStorage 키
+const TOTAL_CHAPS     = 1189; // 구약 929 + 신약 260
 
 /* ── 상태 ────────────────────────────────────────── */
 const state = {
@@ -17,6 +24,7 @@ const state = {
   searchQuery:     '',
   searchDebounce:  null,
   downloading:     false,
+  searchIndex:     null,      // 서버에서 로드한 검색 인덱스 (세션 메모리 캐시)
   bmMode:             false,  // 책갈피 선택 모드
   bmIgnoreNextClick:  false   // 롱프레스 해제 click 오발 방지 플래그
 };
@@ -357,9 +365,11 @@ function exitBmMode(wrap) {
 }
 
 /* =========================================================
-   API 페치 — 단일 장  (getbible.net/v2/korean)
-   URL 형식: /v2/korean/{책번호}/{장번호}.json
-   응답 형식: { verses: [{verse, text}, ...] }
+   리모트 서버 → 단일 장 페치
+   URL: {BIBLE_SERVER}/bible/{책번호}/{장번호}.json
+   서버 응답 형식 (두 가지 모두 지원):
+     A) {"1":"text","2":"text",...}          ← generate-bible-data.js 생성 형식
+     B) { verses: [{verse, text}, ...] }     ← getbible.net 호환 형식
    ========================================================= */
 // save=false: 온라인 읽기 (저장 안 함) / save=true: 전체 다운로드 시 저장
 async function fetchChapterData(bookName, chapter, save = false) {
@@ -367,21 +377,55 @@ async function fetchChapterData(bookName, chapter, save = false) {
   if (!bookNum) return null;
 
   try {
-    const url  = `${GETBIBLE_API}/${bookNum}/${chapter}.json`;
+    const base = BIBLE_SERVER || window.location.origin;
+    const url  = `${base}/bible/${bookNum}/${chapter}.json`;
     const resp = await fetch(url);
     if (!resp.ok) return null;
     const data = await resp.json();
 
-    const verses = data.verses;
-    if (!Array.isArray(verses) || verses.length === 0) return null;
+    // 형식 A: {"1":"text",...}
+    // 형식 B: {verses:[{verse,text},...]}
+    let obj;
+    if (Array.isArray(data.verses)) {
+      obj = {};
+      data.verses.forEach(v => { obj[v.verse] = (v.text || '').trim(); });
+    } else {
+      obj = data;
+    }
 
-    const obj = {};
-    verses.forEach(v => {
-      obj[v.verse] = (v.text || '').trim();
-    });
+    if (!obj || Object.keys(obj).length === 0) return null;
     if (save) saveChapterToLocal(bookName, chapter, obj);
     return obj;
   } catch (e) { return null; }
+}
+
+/* =========================================================
+   검색 인덱스 로드 (메모리 → localStorage → 서버 순)
+   ========================================================= */
+async function loadSearchIndex() {
+  // 1. 세션 메모리 캐시
+  if (state.searchIndex) return state.searchIndex;
+
+  // 2. localStorage 캐시
+  try {
+    const cached = localStorage.getItem(LS_SEARCH_IDX);
+    if (cached) {
+      state.searchIndex = JSON.parse(cached);
+      return state.searchIndex;
+    }
+  } catch(e) {}
+
+  // 3. 서버에서 로드
+  try {
+    const base = BIBLE_SERVER || window.location.origin;
+    const resp = await fetch(`${base}/bible/search.json`);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    state.searchIndex = data;
+    // 오프라인 검색을 위해 localStorage에도 저장
+    try { localStorage.setItem(LS_SEARCH_IDX, JSON.stringify(data)); } catch(e) {}
+    return data;
+  } catch(e) { return null; }
 }
 
 async function fetchAndShowChapter(bookName, chapter, targetVerse) {
@@ -532,7 +576,7 @@ function renderSearch() {
   updateSearchResults();
 }
 
-function updateSearchResults() {
+async function updateSearchResults() {
   const body = mainEl.querySelector('#search-body');
   if (!body) return;
   const q = state.searchQuery.trim();
@@ -542,19 +586,29 @@ function updateSearchResults() {
     return;
   }
 
-  body.innerHTML = `<div class="search-hint"><div class="spinner" style="margin:0 auto"></div></div>`;
+  body.innerHTML = `<div class="search-hint"><div class="spinner" style="margin:0 auto"></div><p style="color:#999;font-size:13px;margin-top:10px">검색 인덱스 불러오는 중…</p></div>`;
 
-  // 다음 프레임에서 검색 (UI 블로킹 방지)
-  requestAnimationFrame(() => {
-    const results = searchBible(q);
-    if (!mainEl.querySelector('#search-body')) return;
-
-    if (results.length === 0) {
+  // 검색 인덱스 로드 (아직 없으면 서버에서 가져옴)
+  if (!state.searchIndex) {
+    const idx = await loadSearchIndex();
+    if (!mainEl.querySelector('#search-body')) return; // 탭 전환됨
+    if (!idx) {
       body.innerHTML = `
         <div class="no-result">
-          「${escHtml(q)}」 검색 결과 없음<br>
-          <small style="color:#ddd">저장된 장에서만 검색됩니다</small>
+          검색 인덱스를 불러오지 못했습니다<br>
+          <small style="color:#ddd">인터넷 연결을 확인해주세요</small>
         </div>`;
+      return;
+    }
+  }
+
+  // 검색 실행 (다음 프레임, UI 블로킹 방지)
+  requestAnimationFrame(() => {
+    if (!mainEl.querySelector('#search-body')) return;
+    const results = searchBible(q, state.searchIndex);
+
+    if (results.length === 0) {
+      body.innerHTML = `<div class="no-result">「${escHtml(q)}」 검색 결과 없음</div>`;
       return;
     }
 
@@ -853,6 +907,9 @@ function deleteCachedData() {
     if (key && key.startsWith(LS_PREFIX)) keysToDelete.push(key);
   }
   keysToDelete.forEach(k => localStorage.removeItem(k));
+  // 검색 인덱스 캐시도 삭제
+  localStorage.removeItem(LS_SEARCH_IDX);
+  state.searchIndex = null;
 }
 
 /* ── 토스트 메시지 ───────────────────────────── */

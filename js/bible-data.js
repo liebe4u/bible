@@ -223,45 +223,60 @@ function hasChapterData(bookName, chapterNum) {
   return isChapterCached(bookName, chapterNum);
 }
 
-function searchBible(query) {
+// extraIndex: 서버에서 로드한 전체 검색 인덱스 (state.searchIndex)
+// 형식: { "창세기": { "1": { "1": "text", ... }, ... }, ... }
+function searchBible(query, extraIndex = null) {
   const results = [];
   const q = query.trim().toLowerCase();
   if (q.length < 2) return results;
 
   const allBooks = [...BOOKS_OT, ...BOOKS_NT];
 
-  // 번들 데이터 검색
-  for (const book of allBooks) {
-    const bookData = BIBLE_TEXT[book.id];
-    if (!bookData) continue;
-    for (const [chNum, chData] of Object.entries(bookData)) {
-      for (const [vNum, text] of Object.entries(chData)) {
-        if (text.toLowerCase().includes(q)) {
-          results.push({ book: book.id, chapter: parseInt(chNum), verse: parseInt(vNum), text });
+  if (extraIndex) {
+    // 서버 검색 인덱스 사용 (전체 성경 커버)
+    for (const book of allBooks) {
+      const bookData = extraIndex[book.id];
+      if (!bookData) continue;
+      for (const [chNum, chData] of Object.entries(bookData)) {
+        for (const [vNum, text] of Object.entries(chData)) {
+          if (text && text.toLowerCase().includes(q)) {
+            results.push({ book: book.id, chapter: parseInt(chNum), verse: parseInt(vNum), text });
+          }
         }
       }
     }
-  }
-
-  // localStorage 캐시 검색
-  const searched = new Set(results.map(r => `${r.book}_${r.chapter}`));
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (!key.startsWith(LS_PREFIX)) continue;
-    // key 형식: bk_창세기_1
-    const rest = key.slice(LS_PREFIX.length); // "창세기_1"
-    const lastUnd = rest.lastIndexOf('_');
-    const bookName = rest.slice(0, lastUnd);
-    const chNum = parseInt(rest.slice(lastUnd + 1));
-    if (searched.has(`${bookName}_${chNum}`)) continue;
-    try {
-      const chData = JSON.parse(localStorage.getItem(key));
-      for (const [vNum, text] of Object.entries(chData)) {
-        if (text.toLowerCase().includes(q)) {
-          results.push({ book: bookName, chapter: chNum, verse: parseInt(vNum), text });
+  } else {
+    // 폴백: 번들 데이터 + localStorage 캐시 검색
+    for (const book of allBooks) {
+      const bookData = BIBLE_TEXT[book.id];
+      if (!bookData) continue;
+      for (const [chNum, chData] of Object.entries(bookData)) {
+        for (const [vNum, text] of Object.entries(chData)) {
+          if (text.toLowerCase().includes(q)) {
+            results.push({ book: book.id, chapter: parseInt(chNum), verse: parseInt(vNum), text });
+          }
         }
       }
-    } catch (e) {}
+    }
+
+    const searched = new Set(results.map(r => `${r.book}_${r.chapter}`));
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key.startsWith(LS_PREFIX)) continue;
+      const rest = key.slice(LS_PREFIX.length);
+      const lastUnd = rest.lastIndexOf('_');
+      const bookName = rest.slice(0, lastUnd);
+      const chNum = parseInt(rest.slice(lastUnd + 1));
+      if (searched.has(`${bookName}_${chNum}`)) continue;
+      try {
+        const chData = JSON.parse(localStorage.getItem(key));
+        for (const [vNum, text] of Object.entries(chData)) {
+          if (text.toLowerCase().includes(q)) {
+            results.push({ book: bookName, chapter: chNum, verse: parseInt(vNum), text });
+          }
+        }
+      } catch (e) {}
+    }
   }
 
   // 성경 순서로 정렬
