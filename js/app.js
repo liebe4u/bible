@@ -454,21 +454,28 @@ function showCtxMenu(anchorRow) {
           stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
       </svg>
       선택 구절 복사
+    </button>
+    <div class="ctx-divider"></div>
+    <button class="ctx-item ctx-item--close" id="ctx-close">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+        <path d="M18 6 6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      닫기
     </button>`;
 
   document.getElementById('app').appendChild(menu);
 
-  // 위치 계산 (앵커 구절 위 or 아래)
+  // 위치 계산 — 오른쪽 정렬, 위 or 아래
   const rect = anchorRow.getBoundingClientRect();
-  const mh   = 100; // 메뉴 높이 예측값
+  const mh   = 150; // 메뉴 높이 예측값 (3개 항목)
   const mw   = 200;
   let top  = rect.top - mh - 8;
   if (top < 60) top = rect.bottom + 8;
-  let left = rect.left;
-  if (left + mw > window.innerWidth - 12) left = window.innerWidth - mw - 12;
-  if (left < 12) left = 12;
-  menu.style.top  = top + 'px';
-  menu.style.left = left + 'px';
+  // 우측 정렬: 화면 오른쪽 끝에서 12px 여백
+  const right = 12;
+  menu.style.top   = top + 'px';
+  menu.style.right = right + 'px';
+  menu.style.left  = 'auto';
 
   // 이벤트
   menu.querySelector('#ctx-bookmark').addEventListener('click', e => {
@@ -498,6 +505,12 @@ function showCtxMenu(anchorRow) {
     } else {
       fallbackCopy(copyText);
     }
+    exitSelMode();
+  });
+
+  // 닫기 버튼 → 선택 초기화 후 종료
+  menu.querySelector('#ctx-close').addEventListener('click', e => {
+    e.stopPropagation();
     exitSelMode();
   });
 
