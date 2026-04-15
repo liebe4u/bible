@@ -250,46 +250,19 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
   background: rgba(208, 255, 50, 0.38);
 }
 
-/* ── 절 마커 (번호 / 책갈피 아이콘 영역) ─────── */
-.verse-marker {
+/* ── 절 번호 ─────────────────────────────────── */
+.verse-num {
   flex-shrink: 0;
   width: 26px;
   min-width: 26px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 4px;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.verse-num {
   font-size: 11px;
   color: #bbb;
   line-height: 1.6;
   text-align: center;
+  padding-top: 4px;
+  user-select: none;
+  -webkit-user-select: none;
 }
-
-.bm-icon {
-  display: none;
-  align-items: center;
-  justify-content: center;
-  color: #ccc;
-  width: 15px;
-  height: 22px;
-}
-.bm-icon svg { width: 15px; height: 22px; }
-
-/* BM 선택 모드 전환 */
-.reading-wrap.bm-mode .verse-num    { display: none; }
-.reading-wrap.bm-mode .bm-icon      { display: flex; }
-.reading-wrap.bm-mode .verse-marker { cursor: pointer; }
-.reading-wrap.bm-mode .verse-marker:active { opacity: 0.45; }
-
-.bm-hint-bar { display: none; }
-
-/* 이미 책갈피된 구절: 아이콘 채움 색상 */
-.verse-row.bm-saved .bm-icon { color: #e0a0b0; }
 
 /* ── 구절 텍스트 ──────────────────────────────── */
 .verse-text {
@@ -300,13 +273,55 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
   flex: 1;
 }
 
-/* 책갈피된 구절 표시 */
-.verse-row.bm-saved .verse-num {
-  color: #e0a0b0;
-  font-weight: 900;
+/* ── 책갈피된 구절 표시 ───────────────────────── */
+.verse-row.bm-saved .verse-num  { color: #e0a0b0; font-weight: 900; }
+.verse-row.bm-saved .verse-text { color: #c9849a; }
+
+/* ── 다중선택 모드 ────────────────────────────── */
+.reading-wrap.sel-mode .verse-row { cursor: pointer; }
+
+.verse-row.sel-active {
+  background: #f4f4f4;
+  border-radius: 6px;
 }
-.verse-row.bm-saved .verse-text {
-  color: #c9849a;
+.verse-row.sel-active .verse-num  { color: #555; font-weight: 700; }
+.verse-row.sel-active .verse-text { color: #111; }
+
+/* ── 컨텍스트 메뉴 ────────────────────────────── */
+.verse-ctx-menu {
+  position: fixed;
+  z-index: 200;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.16);
+  padding: 6px 0;
+  min-width: 180px;
+  animation: ctx-appear 0.12s ease;
+}
+@keyframes ctx-appear {
+  from { opacity: 0; transform: scale(0.93); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 18px;
+  font-size: 15px;
+  font-family: inherit;
+  font-weight: 500;
+  color: #111;
+  text-align: left;
+  background: none;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.ctx-item:active { background: #f5f5f5; }
+.ctx-divider {
+  height: 1px;
+  background: #f0f0f0;
+  margin: 2px 0;
 }
 
 .no-text-box {
