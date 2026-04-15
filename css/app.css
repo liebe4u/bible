@@ -318,6 +318,7 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
   transition: background 0.1s;
 }
 .ctx-item:active { background: #f5f5f5; }
+.ctx-item--close { color: #999; }
 .ctx-divider {
   height: 1px;
   background: #f0f0f0;
