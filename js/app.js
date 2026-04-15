@@ -26,11 +26,11 @@ const state = {
   searchDebounce:  null,
   downloading:     false,
   downloadCancel:  false,  // 다운로드 중단 플래그
-  searchIndex:     null,      // 서버에서 로드한 검색 인덱스 (세션 메모리 캐시)
-  bookFilter:      '',        // 책 목록 필터 텍스트
-  bookFilterOpen:  false,     // 필터 입력창 열림 여부
-  bmMode:             false,  // 책갈피 선택 모드
-  bmIgnoreNextClick:  false   // 롱프레스 해제 click 오발 방지 플래그
+  searchIndex:     null,   // 서버에서 로드한 검색 인덱스 (세션 메모리 캐시)
+  bookFilter:      '',     // 책 목록 필터 텍스트
+  bookFilterOpen:  false,  // 필터 입력창 열림 여부
+  selMode:         false,  // 구절 다중선택 모드
+  selVerses:       new Set() // 선택된 절 번호 Set
 };
 
 /* ── DOM ─────────────────────────────────────────── */
@@ -68,12 +68,14 @@ function switchTab(tab) {
   state.selectedVerse = null;
   state.bookFilter    = '';
   state.bookFilterOpen = false;
+  exitSelMode();
   navBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   render();
 }
 
 function goBack() {
   if (state.currentTab === 'search' || state.currentTab === 'settings') return;
+  exitSelMode();
   if (state.currentView === 'reading') {
     state.currentView = 'verses';
     state.selectedVerse = null;
@@ -274,14 +276,13 @@ function renderReading() {
   const target = state.selectedVerse;
   const total  = getVerseCount(book.id, ch);
   titleEl.textContent = `${book.id} ${ch}장`;
-  state.bmMode = false;
+  exitSelMode();
 
   const hasData = hasChapterData(book.id, ch);
 
   let html = `<div class="reading-wrap" id="reading-wrap">
     <div class="reading-title">${book.id}</div>
-    <div class="reading-subtitle">${ch}장</div>
-    <div class="bm-hint-bar">책갈피 선택 후 아무 곳이나 탭하세요</div>`;
+    <div class="reading-subtitle">${ch}장</div>`;
 
   if (hasData) {
     for (let v = 1; v <= total; v++) {
@@ -292,16 +293,7 @@ function renderReading() {
       html += `
         <div class="verse-row${isT ? ' target-verse' : ''}${marked ? ' bm-saved' : ''}" id="v-${v}"
           data-book="${escHtml(book.id)}" data-ch="${ch}" data-v="${v}" data-text="${escHtml(text)}">
-          <div class="verse-marker">
-            <span class="verse-num">${v}</span>
-            <span class="bm-icon">
-              <svg viewBox="0 0 24 24" fill="${marked ? 'currentColor' : 'none'}">
-                <path d="M5 3h14a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"
-                  stroke="currentColor" stroke-width="1.3"
-                  stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </span>
-          </div>
+          <span class="verse-num">${v}</span>
           <span class="verse-text">${escHtml(text)}</span>
         </div>`;
     }
@@ -314,9 +306,8 @@ function renderReading() {
         if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
       });
     }
-    attachVerseHandlers();
+    attachVerseSelectHandlers();
   } else {
-    // 데이터 없음 → 자동 온라인 fetch (저장 안 함)
     html += `
       <div class="auto-fetch-wrap" id="auto-fetch-wrap">
         <div class="spinner"></div>
@@ -332,30 +323,21 @@ function renderReading() {
 // fetch된 verses 객체로 읽기 뷰를 직접 렌더 (저장 없이)
 function renderReadingFromData(book, ch, target, versesObj) {
   titleEl.textContent = `${book.id} ${ch}장`;
-  state.bmMode = false;
+  exitSelMode();
 
   let html = `<div class="reading-wrap" id="reading-wrap">
     <div class="reading-title">${book.id}</div>
-    <div class="reading-subtitle">${ch}장</div>
-    <div class="bm-hint-bar">책갈피 선택 후 아무 곳이나 탭하세요</div>`;
+    <div class="reading-subtitle">${ch}장</div>`;
 
-  for (const [vStr, text] of Object.entries(versesObj)) {
+  const entries = Object.entries(versesObj).sort((a, b) => parseInt(a[0]) - parseInt(b[0]));
+  for (const [vStr, text] of entries) {
     const v      = parseInt(vStr);
     const isT    = v === target;
     const marked = isBookmarked(book.id, ch, v);
     html += `
       <div class="verse-row${isT ? ' target-verse' : ''}${marked ? ' bm-saved' : ''}" id="v-${v}"
         data-book="${escHtml(book.id)}" data-ch="${ch}" data-v="${v}" data-text="${escHtml(text)}">
-        <div class="verse-marker">
-          <span class="verse-num">${v}</span>
-          <span class="bm-icon">
-            <svg viewBox="0 0 24 24" fill="${marked ? 'currentColor' : 'none'}">
-              <path d="M5 3h14a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"
-                stroke="currentColor" stroke-width="1.3"
-                stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </span>
-        </div>
+        <span class="verse-num">${v}</span>
         <span class="verse-text">${escHtml(text)}</span>
       </div>`;
   }
@@ -369,71 +351,182 @@ function renderReadingFromData(book, ch, target, versesObj) {
       if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     });
   }
-  attachVerseHandlers();
+  attachVerseSelectHandlers();
 }
 
 /* =========================================================
-   책갈피 선택 모드 — 롱프레스 UX
+   구절 다중선택 모드 — 롱프레스 → 컨텍스트 메뉴
    ========================================================= */
-function attachVerseHandlers() {
+function attachVerseSelectHandlers() {
   const wrap = mainEl.querySelector('#reading-wrap');
   if (!wrap) return;
 
   let pressTimer = null;
   let pressStartY = 0;
+  let longPressed = false; // 롱프레스 후 pointerup click 흡수용
 
   wrap.addEventListener('contextmenu', e => e.preventDefault());
 
   mainEl.querySelectorAll('.verse-row').forEach(row => {
-    // 롱프레스 감지
+    // ── 롱프레스 감지 ──────────────────────────
     row.addEventListener('pointerdown', e => {
       pressStartY = e.clientY;
+      longPressed = false;
       pressTimer = setTimeout(() => {
         pressTimer = null;
-        if (!state.bmMode) {
-          state.bmMode            = true;
-          state.bmIgnoreNextClick = true; // 롱프레스 해제 시 발생하는 click 무시
-          wrap.classList.add('bm-mode');
-          if (navigator.vibrate) navigator.vibrate(30);
-          showToast('원하는 구절 선택 후 아무 곳이나 선택하면 저장됩니다');
-        }
+        longPressed = true;
+        if (navigator.vibrate) navigator.vibrate(30);
+        // 선택 모드 진입 + 해당 구절 선택
+        state.selMode = true;
+        state.selVerses.clear();
+        state.selVerses.add(parseInt(row.dataset.v));
+        wrap.classList.add('sel-mode');
+        mainEl.querySelectorAll('.verse-row').forEach(r => {
+          r.classList.toggle('sel-active', state.selVerses.has(parseInt(r.dataset.v)));
+        });
+        showCtxMenu(row);
       }, 500);
     });
 
     row.addEventListener('pointermove', e => {
       if (Math.abs(e.clientY - pressStartY) > 8) {
-        clearTimeout(pressTimer);
-        pressTimer = null;
+        clearTimeout(pressTimer); pressTimer = null;
       }
     });
     row.addEventListener('pointerup',     () => { clearTimeout(pressTimer); pressTimer = null; });
     row.addEventListener('pointercancel', () => { clearTimeout(pressTimer); pressTimer = null; });
 
-    // 절 번호(마커) 탭 → 책갈피 토글
-    const marker = row.querySelector('.verse-marker');
-    marker.addEventListener('click', e => {
-      if (!state.bmMode) return;
+    // ── 탭 → 선택 모드에서 구절 토글 ──────────
+    row.addEventListener('click', e => {
+      if (longPressed) { longPressed = false; return; } // 롱프레스 직후 click 흡수
+      if (!state.selMode) return;
       e.stopPropagation();
-      const { book, ch, v, text } = row.dataset;
-      const saved = toggleBookmark(book, parseInt(ch), parseInt(v), text);
-      row.classList.toggle('bm-saved', saved);
-      const path = row.querySelector('.bm-icon svg path');
-      if (path) path.setAttribute('fill', saved ? 'currentColor' : 'none');
+      const v = parseInt(row.dataset.v);
+      if (state.selVerses.has(v)) {
+        state.selVerses.delete(v);
+        row.classList.remove('sel-active');
+      } else {
+        state.selVerses.add(v);
+        row.classList.add('sel-active');
+      }
+      // 선택 해제로 아무것도 없으면 모드 종료
+      if (state.selVerses.size === 0) exitSelMode();
     });
+  });
 
-    // 구절 텍스트 탭 → 선택 모드 종료
-    // (롱프레스 직후 발생하는 첫 click은 bmIgnoreNextClick 플래그로 무시)
-    row.querySelector('.verse-text').addEventListener('click', () => {
-      if (!state.bmMode) return;
-      if (state.bmIgnoreNextClick) { state.bmIgnoreNextClick = false; return; }
-      exitBmMode(wrap);
-    });
+  // ── 빈 공간 탭 → 선택 모드 종료 ───────────
+  wrap.addEventListener('click', e => {
+    if (!state.selMode) return;
+    if (!e.target.closest('.verse-row')) exitSelMode();
   });
 }
 
-function exitBmMode(wrap) {
-  state.bmMode = false;
-  wrap.classList.remove('bm-mode');
+function exitSelMode() {
+  state.selMode = false;
+  state.selVerses.clear();
+  const wrap = mainEl.querySelector('#reading-wrap');
+  if (wrap) wrap.classList.remove('sel-mode');
+  hideCtxMenu();
+}
+
+/* =========================================================
+   컨텍스트 메뉴
+   ========================================================= */
+function showCtxMenu(anchorRow) {
+  hideCtxMenu();
+
+  const menu = document.createElement('div');
+  menu.id        = 'verse-ctx-menu';
+  menu.className = 'verse-ctx-menu';
+  menu.innerHTML = `
+    <button class="ctx-item" id="ctx-bookmark">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+        <path d="M5 3h14a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"
+          stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      책갈피 추가
+    </button>
+    <div class="ctx-divider"></div>
+    <button class="ctx-item" id="ctx-copy">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+        <rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="2"/>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+          stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      선택 구절 복사
+    </button>`;
+
+  document.getElementById('app').appendChild(menu);
+
+  // 위치 계산 (앵커 구절 위 or 아래)
+  const rect = anchorRow.getBoundingClientRect();
+  const mh   = 100; // 메뉴 높이 예측값
+  const mw   = 200;
+  let top  = rect.top - mh - 8;
+  if (top < 60) top = rect.bottom + 8;
+  let left = rect.left;
+  if (left + mw > window.innerWidth - 12) left = window.innerWidth - mw - 12;
+  if (left < 12) left = 12;
+  menu.style.top  = top + 'px';
+  menu.style.left = left + 'px';
+
+  // 이벤트
+  menu.querySelector('#ctx-bookmark').addEventListener('click', e => {
+    e.stopPropagation();
+    const rows = mainEl.querySelectorAll('.verse-row.sel-active');
+    rows.forEach(r => {
+      const { book, ch, v, text } = r.dataset;
+      const saved = addBookmark(book, parseInt(ch), parseInt(v), text);
+      if (saved) r.classList.add('bm-saved');
+    });
+    showToast(`${state.selVerses.size}개 구절을 책갈피에 저장했습니다`);
+    exitSelMode();
+  });
+
+  menu.querySelector('#ctx-copy').addEventListener('click', e => {
+    e.stopPropagation();
+    const sorted = [...state.selVerses].sort((a, b) => a - b);
+    const lines  = sorted.map(v => {
+      const r = mainEl.querySelector(`[data-v="${v}"]`);
+      return r ? `${r.dataset.book} ${r.dataset.ch}:${v} ${r.dataset.text}` : '';
+    }).filter(Boolean);
+    const copyText = lines.join('\n');
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(copyText)
+        .then(() => showToast('복사되었습니다'))
+        .catch(() => fallbackCopy(copyText));
+    } else {
+      fallbackCopy(copyText);
+    }
+    exitSelMode();
+  });
+
+  // 메뉴 외부 탭 → 닫기
+  setTimeout(() => {
+    document.addEventListener('click', hideCtxMenuOnOutside, { once: true });
+  }, 0);
+}
+
+function hideCtxMenuOnOutside(e) {
+  const menu = document.getElementById('verse-ctx-menu');
+  if (menu && !menu.contains(e.target)) exitSelMode();
+}
+
+function hideCtxMenu() {
+  const menu = document.getElementById('verse-ctx-menu');
+  if (menu) menu.remove();
+  document.removeEventListener('click', hideCtxMenuOnOutside);
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;opacity:0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); showToast('복사되었습니다'); }
+  catch(e) { showToast('복사 실패'); }
+  ta.remove();
 }
 
 /* =========================================================
